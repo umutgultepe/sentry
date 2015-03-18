@@ -1,7 +1,7 @@
 Available Clients
 =================
 
-The following clients are officially recognized as production-ready, and support the current Sentry
+The following clients are officially recognized as production-ready, generally supported by the Sentry team, and work with the current Sentry
 protocol:
 
 - Python (`raven-python <http://github.com/getsentry/raven-python>`_)
@@ -14,15 +14,17 @@ protocol:
 - iOS / Objective-C (`raven-objc <https://github.com/getsentry/raven-objc>`_)
 - C# (`raven-csharp <https://github.com/getsentry/raven-csharp>`_)
 
-Additionally, the following experimental clients are available:
+Additionally, the following third party/experimental clients are available:
 
 - Action Script 3 (`raven-as3 <https://github.com/skitoo/raven-as3>`_)
+- Android (`Sentry-Android <https://github.com/joshdholtz/Sentry-Android>`_)
 - CFML (`raven-cfml <https://github.com/jmacul2/raven-cfml>`_)
 - Erlang (`raven-erlang <https://github.com/soundrop/raven-erlang>`_)
+- Go (`raven-go <https://github.com/getsentry/raven-go>`_)
 - Grails (`raven-grails <https://github.com/informant-army/raven-grails>`_)
+- PL/SQL (Oracle) (`raven-plsql <https://github.com/teopost/raven-plsql>`_)
 - R (`logging <http://logging.r-forge.r-project.org/>`_)
 - Server-Side ActionScript (`raven-ssas <https://github.com/seegno/raven-ssas>`_)
-- Go (`raven-go <https://github.com/getsentry/raven-go>`_)
 
 Client Criteria
 ---------------

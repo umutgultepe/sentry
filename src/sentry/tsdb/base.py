@@ -5,7 +5,9 @@ sentry.tsdb.base
 :copyright: (c) 2010-2014 by the Sentry Team, see AUTHORS for more details.
 :license: BSD, see LICENSE for more details.
 """
+from __future__ import absolute_import
 
+from django.conf import settings
 from enum import Enum
 
 ONE_MINUTE = 60
@@ -13,15 +15,8 @@ ONE_HOUR = ONE_MINUTE * 60
 ONE_DAY = ONE_HOUR * 24
 
 
-ROLLUPS = (
-    # time in seconds, samples to keep
-    (10, 30),  # 5 minute at 10 seconds
-    (ONE_HOUR, ONE_DAY * 7),  # 1 days at 1 hour
-    # (ONE_DAY, 30),  # 30 days at 1 day
-)
-
-
 class TSDBModel(Enum):
+    # number of events seen specific to grouping
     project = 1
     project_tag_key = 2
     project_tag_value = 3
@@ -29,11 +24,21 @@ class TSDBModel(Enum):
     group_tag_key = 5
     group_tag_value = 6
 
+    # the number of events sent to the server
+    project_total_received = 100
+    # the number of events rejected due to rate limiting
+    project_total_rejected = 101
+
+    # the number of events sent to the server
+    organization_total_received = 200
+    # the number of events rejected due to rate limiting
+    organization_total_rejected = 201
+
 
 class BaseTSDB(object):
     models = TSDBModel
 
-    def __init__(self, rollups=ROLLUPS):
+    def __init__(self, rollups=settings.SENTRY_TSDB_ROLLUPS):
         self.rollups = rollups
 
     def normalize_to_epoch(self, timestamp, seconds):
@@ -91,9 +96,19 @@ class BaseTSDB(object):
 
         Both ``start`` and ``end`` are inclusive.
 
+        Returns a mapping of key => [(timestamp, count), ...].
+
         >>> now = timezone.now()
         >>> get_keys(TimeSeriesModel.group, [1, 2, 3],
         >>>          start=now - timedelta(days=1),
         >>>          end=now)
         """
         raise NotImplementedError
+
+    def get_sums(self, model, keys, start, end, rollup=None):
+        range_set = self.get_range(model, keys, start, end, rollup)
+        sum_set = dict(
+            (key, sum(p for _, p in points))
+            for (key, points) in range_set.iteritems()
+        )
+        return sum_set

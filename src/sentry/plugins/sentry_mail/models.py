@@ -5,12 +5,15 @@ sentry.plugins.sentry_mail.models
 :copyright: (c) 2010-2014 by the Sentry Team, see AUTHORS for more details.
 :license: BSD, see LICENSE for more details.
 """
+from __future__ import absolute_import
+
 import sentry
 
 from django.conf import settings
 from django.core.urlresolvers import reverse
 from django.utils.safestring import mark_safe
 from django.utils.translation import ugettext_lazy as _
+
 from sentry.plugins import register
 from sentry.plugins.bases.notify import NotificationPlugin
 from sentry.utils.cache import cache
@@ -32,8 +35,7 @@ class MailPlugin(NotificationPlugin):
     subject_prefix = settings.EMAIL_SUBJECT_PREFIX
 
     def _send_mail(self, subject, template=None, html_template=None, body=None,
-                   project=None, group=None, headers=None, context=None,
-                   fail_silently=False):
+                   project=None, group=None, headers=None, context=None):
         send_to = self.get_send_to(project)
         if not send_to:
             return
@@ -50,14 +52,13 @@ class MailPlugin(NotificationPlugin):
             reference=group,
         )
         msg.add_users(send_to, project=project)
-        return msg.send(fail_silently=fail_silently)
+        return msg.send()
 
     def send_test_mail(self, project=None):
         self._send_mail(
             subject='Test Email',
             body='This email was requested as a test of Sentry\'s outgoing email',
             project=project,
-            fail_silently=False,
         )
 
     def get_notification_settings_url(self):
@@ -65,16 +66,16 @@ class MailPlugin(NotificationPlugin):
 
     def get_project_url(self, project):
         return absolute_uri(reverse('sentry-stream', args=[
-            project.team.slug,
+            project.organization.slug,
             project.slug,
         ]))
 
     def on_alert(self, alert):
         project = alert.project
         subject = '[{0} {1}] ALERT: {2}'.format(
-            project.team.name.encode('utf-8'),
-            project.name.encode('utf-8'),
-            alert.message.encode('utf-8'),
+            project.team.name,
+            project.name,
+            alert.message,
         )
         template = 'sentry/emails/alert.txt'
         html_template = 'sentry/emails/alert.html'
@@ -93,10 +94,16 @@ class MailPlugin(NotificationPlugin):
             template=template,
             html_template=html_template,
             project=project,
-            fail_silently=False,
             headers=headers,
             context=context,
         )
+
+    def should_notify(self, group, event):
+        send_to = self.get_sendable_users(group.project)
+        if not send_to:
+            return False
+
+        return super(MailPlugin, self).should_notify(group, event)
 
     def get_send_to(self, project=None):
         """
@@ -127,7 +134,9 @@ class MailPlugin(NotificationPlugin):
 
         return send_to_list
 
-    def notify_users(self, group, event, fail_silently=False):
+    def notify(self, notification):
+        event = notification.event
+        group = event.group
         project = group.project
 
         interface_list = []
@@ -144,17 +153,26 @@ class MailPlugin(NotificationPlugin):
         template = 'sentry/emails/error.txt'
         html_template = 'sentry/emails/error.html'
 
+        rules = []
+        for rule in notification.rules:
+            rule_link = reverse('sentry-edit-project-rule', args=[
+                group.organization.slug, project.slug, rule.id
+            ])
+            rules.append((rule.label, rule_link))
+
         context = {
             'group': group,
             'event': event,
             'tags': event.get_tags(),
             'link': link,
             'interfaces': interface_list,
+            'rules': rules,
         }
 
         headers = {
             'X-Sentry-Logger': group.logger,
             'X-Sentry-Logger-Level': group.get_level_display(),
+            'X-Sentry-Team': project.team.name,
             'X-Sentry-Project': project.name,
             'X-Sentry-Reply-To': group_id_to_email(group.id),
         }
@@ -165,7 +183,6 @@ class MailPlugin(NotificationPlugin):
             html_template=html_template,
             project=project,
             group=group,
-            fail_silently=fail_silently,
             headers=headers,
             context=context,
         )

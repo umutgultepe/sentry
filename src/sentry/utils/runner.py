@@ -20,7 +20,7 @@ USE_GEVENT = os.environ.get('USE_GEVENT')
 KEY_LENGTH = 40
 
 CONFIG_TEMPLATE = """
-# This file is just Python, with a touch of Django which means you
+# This file is just Python, with a touch of Django which means
 # you can inherit and tweak settings to your hearts content.
 from sentry.conf.server import *
 
@@ -43,31 +43,26 @@ DATABASES = {
         'PASSWORD': '',
         'HOST': '',
         'PORT': '',
-
-        # If you're using Postgres, we recommend turning on autocommit
-        # 'OPTIONS': {
-        #     'autocommit': True,
-        # }
     }
 }
 
+# You should not change this setting after your database has been created
+# unless you have altered all schemas first
+SENTRY_USE_BIG_INTS = True
 
 # If you're expecting any kind of real traffic on Sentry, we highly recommend
 # configuring the CACHES and Redis settings
 
-###########
-## CACHE ##
-###########
+#############
+## General ##
+#############
 
-# You'll need to install the required dependencies for Memcached:
-#   pip install python-memcached
-#
-# CACHES = {
-#     'default': {
-#         'BACKEND': 'django.core.cache.backends.memcached.MemcachedCache',
-#         'LOCATION': ['127.0.0.1:11211'],
-#     }
-# }
+# The administrative email for this installation.
+# Note: This will be reported back to getsentry.com as the point of contact. See
+# the beacon documentation for more information.
+
+# SENTRY_ADMIN_EMAIL = 'your.name@example.com'
+SENTRY_ADMIN_EMAIL = ''
 
 ###########
 ## Redis ##
@@ -85,6 +80,25 @@ SENTRY_REDIS_OPTIONS = {
     }
 }
 
+###########
+## Cache ##
+###########
+
+# If you wish to use memcached, install the dependencies and adjust the config
+# as shown:
+#
+#   pip install python-memcached
+#
+# CACHES = {
+#     'default': {
+#         'BACKEND': 'django.core.cache.backends.memcached.MemcachedCache',
+#         'LOCATION': ['127.0.0.1:11211'],
+#     }
+# }
+#
+# SENTRY_CACHE = 'sentry.cache.django.DjangoCache'
+
+SENTRY_CACHE = 'sentry.cache.redis.RedisCache'
 
 ###########
 ## Queue ##
@@ -96,6 +110,12 @@ SENTRY_REDIS_OPTIONS = {
 
 CELERY_ALWAYS_EAGER = False
 BROKER_URL = 'redis://localhost:6379'
+
+#################
+## Rate Limits ##
+#################
+
+SENTRY_RATELIMITER = 'sentry.ratelimits.redis.RedisRateLimiter'
 
 ####################
 ## Update Buffers ##
@@ -126,6 +146,18 @@ SENTRY_QUOTAS = 'sentry.quotas.redis.RedisQuota'
 
 SENTRY_TSDB = 'sentry.tsdb.redis.RedisTSDB'
 
+##################
+## File storage ##
+##################
+
+# Any Django storage backend is compatible with Sentry. For more solutions see
+# the django-storages package: https://django-storages.readthedocs.org/en/latest/
+
+SENTRY_FILESTORE = 'django.core.files.storage.FileSystemStorage'
+SENTRY_FILESTORE_OPTIONS = {
+    'location': '/tmp/sentry-files',
+}
+
 ################
 ## Web Server ##
 ################
@@ -134,16 +166,14 @@ SENTRY_TSDB = 'sentry.tsdb.redis.RedisTSDB'
 SENTRY_URL_PREFIX = 'http://sentry.example.com'  # No trailing slash!
 
 # If you're using a reverse proxy, you should enable the X-Forwarded-Proto
-# and X-Forwarded-Host headers, and uncomment the following settings
+# header and uncomment the following settings
 # SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-# USE_X_FORWARDED_HOST = True
 
 SENTRY_WEB_HOST = '0.0.0.0'
 SENTRY_WEB_PORT = 9000
 SENTRY_WEB_OPTIONS = {
-    'workers': 3,  # the number of gunicorn workers
-    'limit_request_line': 0,  # required for raven-js
-    'secure_scheme_headers': {'X-FORWARDED-PROTO': 'https'},
+    # 'workers': 3,  # the number of gunicorn workers
+    # 'secure_scheme_headers': {'X-FORWARDED-PROTO': 'https'},
 }
 
 #################
@@ -163,6 +193,10 @@ EMAIL_USE_TLS = False
 
 # The email address to send on behalf of
 SERVER_EMAIL = 'root@localhost'
+
+# If you're using mailgun for inbound mail, set your API key and configure a
+# route to forward to /api/hooks/mailgun/inbound/
+MAILGUN_API_KEY = ''
 
 ###########
 ## etc. ##
@@ -273,14 +307,23 @@ def initialize_app(config):
     env.data['config'] = config.get('config_path')
     env.data['start_date'] = timezone.now()
 
-    install_plugins(config['settings'])
+    settings = config['settings']
+
+    install_plugins(settings)
 
     skip_migration_if_applied(
-        config['settings'], 'kombu.contrib.django', 'djkombu_queue')
+        settings, 'kombu.contrib.django', 'djkombu_queue')
     skip_migration_if_applied(
-        config['settings'], 'social_auth', 'social_auth_association')
+        settings, 'social_auth', 'social_auth_association')
 
     apply_legacy_settings(config)
+
+    # Commonly setups don't correctly configure themselves for production envs
+    # so lets try to provide a bit more guidance
+    if settings.CELERY_ALWAYS_EAGER and not settings.DEBUG:
+        warnings.warn('Sentry is configured to run asynchronous tasks in-process. '
+                      'This is not recommended within production environments. '
+                      'See http://sentry.readthedocs.org/en/latest/queue/index.html for more information.')
 
     initialize_receivers()
 
@@ -291,10 +334,17 @@ def apply_legacy_settings(config):
     # SENTRY_USE_QUEUE used to determine if Celery was eager or not
     if hasattr(settings, 'SENTRY_USE_QUEUE'):
         warnings.warn('SENTRY_USE_QUEUE is deprecated. Please use CELERY_ALWAYS_EAGER instead. '
-                      'See http://sentry.readthedocs.org/en/latest/queue/index.html for more information.')
+                      'See http://sentry.readthedocs.org/en/latest/queue/index.html for more information.', DeprecationWarning)
         settings.CELERY_ALWAYS_EAGER = (not settings.SENTRY_USE_QUEUE)
 
-    if settings.SENTRY_URL_PREFIX in ('', 'http://sentry.example.com'):
+    if not settings.SENTRY_ADMIN_EMAIL:
+        print('')
+        print('\033[91m!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\033[0m')
+        print('\033[91m!! SENTRY_ADMIN_EMAIL is not configured !!\033[0m')
+        print('\033[91m!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\033[0m')
+        print('')
+
+    if settings.SENTRY_URL_PREFIX in ('', 'http://sentry.example.com') and not settings.DEBUG:
         # Maybe also point to a piece of documentation for more information?
         # This directly coincides with users getting the awkward
         # `ALLOWED_HOSTS` exception.
@@ -313,9 +363,13 @@ def apply_legacy_settings(config):
         if urlbits.hostname:
             settings.ALLOWED_HOSTS = (urlbits.hostname,)
 
-    if not settings.SERVER_EMAIL and hasattr(settings, 'SENTRY_SERVER_EMAIL'):
-        warnings.warn('SENTRY_SERVER_URL is deprecated. Please use SERVER_URL instead.')
-        settings.SERVER_EMAIL = settings.SENTRY_SERVER_EMAIL
+    if hasattr(settings, 'SENTRY_ALLOW_REGISTRATION'):
+        warnings.warn('SENTRY_ALLOW_REGISTRATION is deprecated. Use SENTRY_FEATURES instead.', DeprecationWarning)
+        settings.SENTRY_FEATURES['auth:register'] = settings.SENTRY_ALLOW_REGISTRATION
+
+    if hasattr(settings, 'SOCIAL_AUTH_CREATE_USERS'):
+        warnings.warn('SOCIAL_AUTH_CREATE_USERS is deprecated. Use SENTRY_FEATURES instead.', DeprecationWarning)
+        settings.SENTRY_FEATURES['social-auth:register'] = settings.SOCIAL_AUTH_CREATE_USERS
 
 
 def skip_migration_if_applied(settings, app_name, table_name,

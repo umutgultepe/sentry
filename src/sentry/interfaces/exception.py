@@ -6,7 +6,11 @@ sentry.interfaces.exception
 :license: BSD, see LICENSE for more details.
 """
 
+from __future__ import absolute_import
+
 __all__ = ('Exception',)
+
+from django.conf import settings
 
 from sentry.interfaces.base import Interface
 from sentry.interfaces.stacktrace import Stacktrace, is_newest_frame_first
@@ -16,9 +20,9 @@ from sentry.web.helpers import render_to_string
 
 class SingleException(Interface):
     """
-    A standard exception with a mandatory ``value`` argument, and optional
-    ``type`` and``module`` argument describing the exception class type and
-    module namespace.
+    A standard exception with a ``type`` and value argument, and an optional
+    ``module`` argument describing the exception class type and
+    module namespace. Either ``type`` or ``value`` must be present.
 
     You can also optionally bind a stacktrace interface to an exception. The
     spec is identical to ``sentry.interfaces.Stacktrace``.
@@ -37,7 +41,7 @@ class SingleException(Interface):
 
     @classmethod
     def to_python(cls, data):
-        assert data.get('value') is not None
+        assert data.get('type') or data.get('value')
 
         if data.get('stacktrace'):
             stacktrace = Stacktrace.to_python(data['stacktrace'])
@@ -45,8 +49,8 @@ class SingleException(Interface):
             stacktrace = None
 
         kwargs = {
-            'value': trim(data['value'], 256),
             'type': trim(data.get('type'), 128),
+            'value': trim(data.get('value'), 1024),
             'module': trim(data.get('module'), 128),
             'stacktrace': stacktrace,
         }
@@ -60,8 +64,8 @@ class SingleException(Interface):
             stacktrace = None
 
         return {
-            'value': self.value,
             'type': self.type,
+            'value': self.value,
             'module': self.module,
             'stacktrace': stacktrace,
         }
@@ -89,7 +93,7 @@ class SingleException(Interface):
             last_frame = interface.frames[-1]
 
         e_module = self.module
-        e_type = self.type or 'Exception'
+        e_type = self.type
         e_value = self.value
 
         if self.module:
@@ -97,14 +101,18 @@ class SingleException(Interface):
         else:
             fullname = e_type
 
+        if e_value and not e_type:
+            e_type = e_value
+            e_value = None
+
         return {
             'is_public': is_public,
             'event': event,
-            'exception_value': e_value or e_type or '<empty value>',
             'exception_type': e_type,
+            'exception_value': e_value,
             'exception_module': e_module,
             'fullname': fullname,
-            'last_frame': last_frame
+            'last_frame': last_frame,
         }
 
 
@@ -142,22 +150,32 @@ class Exception(Interface):
 
     @classmethod
     def to_python(cls, data):
-        if 'values' in data:
-            values = data['values']
-        else:
-            values = [data]
+        if 'values' not in data:
+            data = {'values': [data]}
 
-        assert values
+        assert data['values']
+
+        trim_exceptions(data)
 
         kwargs = {
-            'values': [SingleException.to_python(v) for v in values],
+            'values': [
+                SingleException.to_python(v)
+                for v in data['values']
+            ],
         }
+
+        if data.get('exc_omitted'):
+            assert len(data['exc_omitted']) == 2
+            kwargs['exc_omitted'] = data['exc_omitted']
+        else:
+            kwargs['exc_omitted'] = None
 
         return cls(**kwargs)
 
     def to_json(self):
         return {
             'values': [v.to_json() for v in self.values],
+            'exc_omitted': self.exc_omitted,
         }
 
     def __getitem__(self, key):
@@ -175,27 +193,34 @@ class Exception(Interface):
     def get_path(self):
         return 'sentry.interfaces.Exception'
 
-    def get_hash(self):
-        output = []
-        for value in self.values:
-            output.extend(value.get_hash())
-        return output
+    def compute_hashes(self):
+        system_hash = self.get_hash(system_frames=True)
+        if not system_hash:
+            return []
 
-    def get_composite_hash(self, interfaces):
+        app_hash = self.get_hash(system_frames=False)
+        if system_hash == app_hash or not app_hash:
+            return [system_hash]
+
+        return [system_hash, app_hash]
+
+    def get_hash(self, system_frames=True):
         # optimize around the fact that some exceptions might have stacktraces
         # while others may not and we ALWAYS want stacktraces over values
         output = []
         for value in self.values:
             if not value.stacktrace:
                 continue
-            stack_hash = value.stacktrace.get_hash()
+            stack_hash = value.stacktrace.get_hash(
+                system_frames=system_frames,
+            )
             if stack_hash:
                 output.extend(stack_hash)
                 output.append(value.type)
 
         if not output:
             for value in self.values:
-                output.extend(value.get_composite_hash(interfaces))
+                output.extend(value.get_hash())
 
         return output
 
@@ -223,11 +248,18 @@ class Exception(Interface):
         if newest_first:
             exceptions.reverse()
 
+        if self.exc_omitted:
+            first_exc_omitted, last_exc_omitted = self.exc_omitted
+        else:
+            first_exc_omitted, last_exc_omitted = None, None
+
         return {
             'newest_first': newest_first,
             'system_frames': sum(e['stacktrace'].get('system_frames', 0) for e in exceptions),
             'exceptions': exceptions,
-            'stacktrace': self.get_stacktrace(event, newest_first=newest_first)
+            'stacktrace': self.get_stacktrace(event, newest_first=newest_first),
+            'first_exc_omitted': first_exc_omitted,
+            'last_exc_omitted': last_exc_omitted,
         }
 
     def to_html(self, event, **kwargs):
@@ -260,3 +292,20 @@ class Exception(Interface):
         if exc.stacktrace:
             return exc.stacktrace.get_stacktrace(*args, **kwargs)
         return ''
+
+
+def trim_exceptions(data, max_values=settings.SENTRY_MAX_EXCEPTIONS):
+    # TODO: this doesnt account for cases where the client has already omitted
+    # exceptions
+    values = data['values']
+    exc_len = len(values)
+
+    if exc_len <= max_values:
+        return
+
+    half_max = max_values / 2
+
+    data['exc_omitted'] = (half_max, exc_len - half_max)
+
+    for n in xrange(half_max, exc_len - half_max):
+        del values[half_max]

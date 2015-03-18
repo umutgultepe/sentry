@@ -6,163 +6,123 @@ sentry.tasks.post_process
 :license: BSD, see LICENSE for more details.
 """
 
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function
 
 import logging
 
 from django.conf import settings
 from hashlib import md5
 
+from sentry.constants import PLATFORM_LIST, PLATFORM_ROOTS
 from sentry.plugins import plugins
-from sentry.rules import rules
 from sentry.tasks.base import instrumented_task
-from sentry.utils.cache import cache
+from sentry.utils import metrics
 from sentry.utils.safe import safe_execute
 
 
-rules_logger = logging.getLogger('sentry.errors.rules')
+rules_logger = logging.getLogger('sentry')
 
 
-def condition_matches(project, condition, **kwargs):
-    condition_cls = rules.get(condition['id'])
-    if condition_cls is None:
-        rules_logger.error('Unregistered condition %r', condition['id'])
+def _capture_stats(event, is_new):
+    group = event.group
+    platform = group.platform or group.project.platform
+    if not platform:
+        return
+    platform = PLATFORM_ROOTS.get(platform, platform)
+    if platform not in PLATFORM_LIST:
         return
 
-    condition_inst = condition_cls(project)
-    return safe_execute(condition_inst.passes, **kwargs)
+    if is_new:
+        metrics.incr('events.unique', 1)
 
-
-def get_rules(project):
-    from sentry.models import Rule
-
-    cache_key = 'project:%d:rules' % (project.id,)
-    rules_list = cache.get(cache_key)
-    if rules_list is None:
-        rules_list = list(Rule.objects.filter(project=project))
-        cache.set(cache_key, rules_list, 60)
-    return rules_list
+    metrics.incr('events.processed', 1)
+    metrics.incr('events.processed.{platform}'.format(
+        platform=platform), 1)
+    metrics.timing('events.size.data', len(unicode(event.data)))
 
 
 @instrumented_task(
-    name='sentry.tasks.post_process.post_process_group',
-    queue='triggers')
-def post_process_group(group, event, is_new, is_regression, is_sample, **kwargs):
+    name='sentry.tasks.post_process.post_process_group')
+def post_process_group(event, is_new, is_regression, is_sample, **kwargs):
     """
     Fires post processing hooks for a group.
     """
     from sentry.models import Project
+    from sentry.rules.processor import RuleProcessor
 
-    project = Project.objects.get_from_cache(id=group.project_id)
+    project = Project.objects.get_from_cache(id=event.group.project_id)
 
-    child_kwargs = {
-        'event': event,
-        'is_new': is_new,
-        'is_regression': is_regression,
-        'is_sample': is_sample,
-    }
+    _capture_stats(event, is_new)
 
     if settings.SENTRY_ENABLE_EXPLORE_CODE:
-        record_affected_code.delay(group=group, event=event)
+        record_affected_code.delay(event=event)
 
     if settings.SENTRY_ENABLE_EXPLORE_USERS:
-        record_affected_user.delay(group=group, event=event)
+        record_affected_user.delay(event=event)
 
     for plugin in plugins.for_project(project):
-        plugin_post_process_group.delay(
-            plugin.slug, group=group, **child_kwargs)
-
-    for rule in get_rules(project):
-        match = rule.data.get('action_match', 'all')
-        condition_list = rule.data.get('conditions', ())
-        if not condition_list:
-            pass
-        elif match == 'all':
-            if not all(condition_matches(project, c, **child_kwargs) for c in condition_list):
-                continue
-        elif match == 'any':
-            if not any(condition_matches(project, c, **child_kwargs) for c in condition_list):
-                continue
-        elif match == 'none':
-            if any(condition_matches(project, c, **child_kwargs) for c in condition_list):
-                continue
-        else:
-            rules_logger.error('Unsupported action_match %r for rule %d',
-                               match, rule.id)
-            continue
-
-        execute_rule.delay(
-            rule_id=rule.id,
-            **child_kwargs
+        plugin_post_process_group.apply_async(
+            kwargs={
+                'plugin_slug': plugin.slug,
+                'event': event,
+                'is_new': is_new,
+                'is_regresion': is_regression,
+                'is_sample': is_sample,
+            },
+            expires=300,
         )
 
-
-@instrumented_task(
-    name='sentry.tasks.post_process.execute_rule',
-    queue='triggers')
-def execute_rule(rule_id, event, **kwargs):
-    """
-    Fires post processing hooks for a rule.
-    """
-    from sentry.models import Project, Rule
-
-    rule = Rule.objects.get(id=rule_id)
-    project = Project.objects.get_from_cache(id=event.project_id)
-    event.project = project
-    event.group.project = project
-
-    for action in rule.data.get('actions', ()):
-        action_cls = rules.get(action['id'])
-        if action_cls is None:
-            rules_logger.error('Unregistered action %r', action['id'])
-            continue
-
-        action_inst = action_cls(project)
-        safe_execute(action_inst.after, event=event, **kwargs)
+    rp = RuleProcessor(event, is_new, is_regression, is_sample)
+    # TODO(dcramer): ideally this would fanout, but serializing giant
+    # objects back and forth isn't super efficient
+    for callback, futures in rp.apply():
+        safe_execute(callback, event, futures)
 
 
 @instrumented_task(
     name='sentry.tasks.post_process.plugin_post_process_group',
-    queue='triggers',
     stat_suffix=lambda plugin_slug, *a, **k: plugin_slug)
-def plugin_post_process_group(plugin_slug, group, **kwargs):
+def plugin_post_process_group(plugin_slug, event, **kwargs):
     """
     Fires post processing hooks for a group.
     """
     plugin = plugins.get(plugin_slug)
-    safe_execute(plugin.post_process, group=group, **kwargs)
+    safe_execute(plugin.post_process, event=event, group=event.group, **kwargs)
 
 
 @instrumented_task(
-    name='sentry.tasks.post_process.record_affected_user',
-    queue='triggers')
-def record_affected_user(group, event, **kwargs):
+    name='sentry.tasks.post_process.record_affected_user')
+def record_affected_user(event, **kwargs):
     from sentry.models import Group
 
+    logger = record_affected_user.get_logger()
+
     if not settings.SENTRY_ENABLE_EXPLORE_USERS:
+        logger.info('Skipping sentry:user tag due to SENTRY_ENABLE_EXPLORE_USERS')
         return
 
     user_ident = event.user_ident
     if not user_ident:
+        logger.info('No user data found for event_id=%s', event.event_id)
         return
 
-    user_data = event.data.get('sentry.interfaces.User', {})
+    user_data = event.data.get('sentry.interfaces.User', event.data.get('user', {}))
 
-    Group.objects.add_tags(group, [
-        ('sentry:user', user_ident, {
-            'id': user_data.get('id'),
-            'email': user_data.get('email'),
-            'username': user_data.get('username'),
-            'data': user_data.get('data'),
-            'ip': event.ip_address,
-        })
+    tag_data = {}
+    for key in ('id', 'email', 'username', 'data'):
+        value = user_data.get(key)
+        if value:
+            tag_data[key] = value
+    tag_data['ip'] = event.ip_address
+
+    Group.objects.add_tags(event.group, [
+        ('sentry:user', user_ident, tag_data)
     ])
 
 
 @instrumented_task(
-    name='sentry.tasks.post_process.record_affected_code',
-    queue='triggers')
-def record_affected_code(group, event, **kwargs):
+    name='sentry.tasks.post_process.record_affected_code')
+def record_affected_code(event, **kwargs):
     from sentry.models import Group
 
     if not settings.SENTRY_ENABLE_EXPLORE_CODE:
@@ -203,4 +163,4 @@ def record_affected_code(group, event, **kwargs):
                 ))
 
     if tags:
-        Group.objects.add_tags(group, tags)
+        Group.objects.add_tags(event.group, tags)

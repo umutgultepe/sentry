@@ -28,7 +28,7 @@
 
         render: function(){
             var data = this.model.toJSON();
-            data.projectUrl = app.config.urlPrefix + '/' + app.config.teamId +
+            data.projectUrl = app.config.urlPrefix + '/' + app.config.organizationId +
                 '/' + data.project.slug + '/';
             data.loggerUrl = data.projectUrl + '?logger=' + data.logger;
 
@@ -113,19 +113,19 @@
         },
 
         getResolveUrl: function(){
-            return app.config.urlPrefix + '/api/' + app.config.teamId + '/' +
+            return app.config.urlPrefix + '/api/' + app.config.organizationId + '/' +
                     app.config.projectId + '/group/' + this.model.get('id') +
                     '/set/resolved/';
         },
 
         getUnresolveUrl: function(){
-            return app.config.urlPrefix + '/api/' + app.config.teamId + '/' +
+            return app.config.urlPrefix + '/api/' + app.config.organizationId + '/' +
                     app.config.projectId + '/group/' + this.model.get('id') +
                     '/set/unresolved/';
         },
 
         getBookmarkUrl: function(){
-            return app.config.urlPrefix + '/api/' + app.config.teamId + '/' + app.config.projectId + '/bookmark/';
+            return app.config.urlPrefix + '/api/' + app.config.organizationId + '/' + app.config.projectId + '/bookmark/';
         },
 
         bookmark: function(){
@@ -247,11 +247,11 @@
 
     app.OrderedElementsView = Backbone.View.extend({
 
-        emptyMessage: '<div class="empty-message"><h2>No events to show.</h2><p>We\'ll notify you if that changes. In the meantime why not take a moment to become more familiar with Sentry.</p><p class="links"><a href="docs/">Installation instructions</a> <a href="settings/">Project settings</a></p></div>',
         loadingMessage: '<p>Loading...</p>',
         model: app.models.Group,
 
         defaults: {
+            emptyMessage: '<p>There is no data to show.</p>',
             maxItems: 50,
             view: Backbone.View
         },
@@ -298,7 +298,7 @@
                 this.setEmpty();
                 this.loaded = false;
             } else {
-                this.$empty.html(this.emptyMessage);
+                this.$empty.html(this.options.emptyMessage);
                 this.collection.reset(members);
                 this.loaded = true;
             }
@@ -316,17 +316,25 @@
 
         addMember: function(member){
             var existing = this.collection.get(member.id);
+
+            function getAttr(x) {
+                if (typeof member.get === 'function') {
+                    return member.get(x);
+                } else {
+                    return member[x];
+                }
+            }
             if (!existing) {
                 if (this.collection.length >= this.options.maxItems) {
                     // bail early if the score is too low
-                    if (member.score < this.collection.last().get('score'))
+                    if (getAttr('score') < this.collection.last().get('score'))
                         return;
 
                     // make sure we limit the number shown
                     while (this.collection.length >= this.options.maxItems)
                         this.collection.pop();
                 }
-            } else if (member.version && existing.get('version') >= member.version) {
+            } else if (existing.get('version') >= (getAttr('version') || 0)) {
                 return;
             }
             this.collection.add(member, {merge: true});
@@ -419,6 +427,8 @@
     app.GroupListView = app.OrderedElementsView.extend({
 
         defaults: {
+            emptyMessage: '<p>There is no data to show.</p>',
+            maxItems: 50,
             realtime: false,
             stream: false,
             pollUrl: null,
@@ -464,11 +474,13 @@
             }
         },
 
-        pollSuccess: function(groups){
+        pollSuccess: function(groups, _, jqXHR){
             if (!groups.length)
                 return window.setTimeout(this.poll, this.options.pollTime * 5);
 
-            this.cursor = groups[groups.length - 1].score;
+            var links = app.utils.parseLinkHeader(jqXHR.getResponseHeader('Link'));
+
+            this.options.pollUrl = links.previous;
 
             this.queue.add(groups, {merge: true});
 

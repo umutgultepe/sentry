@@ -1,13 +1,14 @@
+from __future__ import absolute_import
+
 from datetime import timedelta
 from django import forms
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 
-from sentry.api.base import Endpoint
-from sentry.api.permissions import assert_perm
+from sentry.api.bases.group import GroupEndpoint
 from sentry.api.serializers import serialize
-from sentry.models import Group, Activity
+from sentry.models import Activity
 from sentry.utils.functional import extract_lazy_object
 
 
@@ -15,14 +16,8 @@ class NewNoteForm(forms.Form):
     text = forms.CharField()
 
 
-class GroupNotesEndpoint(Endpoint):
-    def get(self, request, group_id):
-        group = Group.objects.get(
-            id=group_id,
-        )
-
-        assert_perm(group, request.user, request.auth)
-
+class GroupNotesEndpoint(GroupEndpoint):
+    def get(self, request, group):
         notes = Activity.objects.filter(
             group=group,
             type=Activity.NOTE,
@@ -31,17 +26,12 @@ class GroupNotesEndpoint(Endpoint):
         return self.paginate(
             request=request,
             queryset=notes,
-            order_by='-datetime',
+            # TODO(dcramer): we want to sort by datetime
+            order_by='-id',
             on_results=lambda x: serialize(x, request.user),
         )
 
-    def post(self, request, group_id):
-        group = Group.objects.get(
-            id=group_id,
-        )
-
-        assert_perm(group, request.user, request.auth)
-
+    def post(self, request, group):
         form = NewNoteForm(request.DATA)
         if not form.is_valid():
             return Response('{"error": "form"}', status=status.HTTP_400_BAD_REQUEST)
@@ -63,7 +53,6 @@ class GroupNotesEndpoint(Endpoint):
             data=form.cleaned_data,
         )
 
-        # TODO: move this into the queue
         activity.send_notification()
 
         return Response(serialize(activity, request.user), status=201)

@@ -6,7 +6,7 @@ sentry.db.models.manager
 :license: BSD, see LICENSE for more details.
 """
 
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function
 
 import hashlib
 import logging
@@ -28,7 +28,7 @@ from .query import create_or_update
 
 __all__ = ('BaseManager',)
 
-logger = logging.getLogger('sentry.errors')
+logger = logging.getLogger('sentry')
 
 
 class ImmutableDict(dict):

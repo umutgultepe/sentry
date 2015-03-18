@@ -6,6 +6,8 @@ sentry.interfaces.stacktrace
 :license: BSD, see LICENSE for more details.
 """
 
+from __future__ import absolute_import
+
 __all__ = ('Stacktrace',)
 
 import re
@@ -81,7 +83,7 @@ def is_newest_frame_first(event):
 
 
 def is_url(filename):
-    return filename.startswith(('http:', 'https:', 'file:'))
+    return '://' in filename
 
 
 def remove_function_outliers(function):
@@ -175,10 +177,14 @@ class Frame(Interface):
             'post_context': data.get('post_context'),
             'vars': context_locals,
             'data': extra_data,
+            'errors': data.get('errors'),
         }
 
         if data.get('lineno') is not None:
-            kwargs['lineno'] = int(data['lineno'])
+            lineno = int(data['lineno'])
+            if lineno < 0:
+                lineno = None
+            kwargs['lineno'] = lineno
         else:
             kwargs['lineno'] = None
 
@@ -194,6 +200,12 @@ class Frame(Interface):
             return False
         return is_url(self.abs_path)
 
+    def is_caused_by(self):
+        # XXX(dcramer): dont compute hash using frames containing the 'Caused by'
+        # text as it contains an exception value which may may contain dynamic
+        # values (see raven-java#125)
+        return self.filename.startswith('Caused by: ')
+
     def get_hash(self):
         """
         The hash of the frame varies depending on the data available.
@@ -207,7 +219,7 @@ class Frame(Interface):
         output = []
         if self.module:
             output.append(self.module)
-        elif self.filename and not self.is_url():
+        elif self.filename and not self.is_url() and not self.is_caused_by():
             output.append(remove_filename_outliers(self.filename))
 
         if self.context_line is None:
@@ -260,6 +272,7 @@ class Frame(Interface):
             'colno': self.colno,
             'context': context,
             'context_line': self.context_line,
+            'errors': self.errors or [],
             'in_app': self.in_app,
             'is_url': self.is_url(),
         }
@@ -418,27 +431,26 @@ class Stacktrace(Interface):
     def has_app_frames(self):
         return any(f.in_app is not None for f in self.frames)
 
-    def unserialize(self, data):
-        data['frames'] = [Frame(**f) for f in data.pop('frames', [])]
-        data['frames_omitted'] = data.pop('frames_omitted', None)
-        return data
+    def compute_hashes(self):
+        system_hash = self.get_hash(system_frames=True)
+        if not system_hash:
+            return []
 
-    def get_composite_hash(self, interfaces):
-        output = self.get_hash()
-        if 'sentry.interfaces.Exception' in interfaces:
-            exc = interfaces['sentry.interfaces.Exception'][0]
-            if exc.type:
-                output.append(exc.type)
-            elif not output:
-                output = exc.get_hash()
-        return output
+        app_hash = self.get_hash(system_frames=False)
+        if system_hash == app_hash or not app_hash:
+            return [system_hash]
 
-    def get_hash(self):
+        return [system_hash, app_hash]
+
+    def get_hash(self, system_frames=True):
         frames = self.frames
 
         # TODO(dcramer): this should apply only to JS
-        if len(frames) == 1 and frames[0].lineno == '1' and frames[0].function in ('?', None):
+        if len(frames) == 1 and frames[0].lineno == 1 and frames[0].function in ('?', None):
             return []
+
+        if not system_frames:
+            frames = [f for f in frames if f.in_app] or frames
 
         output = []
         for frame in frames:
@@ -495,7 +507,7 @@ class Stacktrace(Interface):
         return render_to_string('sentry/partial/interfaces/stacktrace.html', context)
 
     def to_string(self, event, is_public=False, **kwargs):
-        return self.get_stacktrace(event, system_frames=False, max_frames=5)
+        return self.get_stacktrace(event, system_frames=False, max_frames=10)
 
     def get_stacktrace(self, event, system_frames=True, newest_first=None,
                        max_frames=None, header=True):

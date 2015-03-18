@@ -39,12 +39,18 @@ class TaggedEventCondition(EventCondition):
     form_cls = TaggedEventForm
     label = 'An events tags match {key} {match} {value}'
 
-    def passes(self, event, is_regression, **kwargs):
+    def passes(self, event, state, **kwargs):
         key = self.get_option('key')
         match = self.get_option('match')
         value = self.get_option('value')
 
-        tags = (v for k, v in event.get_tags() if k == key)
+        if not (key and match and value):
+            return False
+
+        value = value.lower()
+        key = key.lower()
+
+        tags = (v.lower() for k, v in event.get_tags() if k.lower() == key)
 
         if match == MatchType.EQUAL:
             for t_value in tags:

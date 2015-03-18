@@ -4,7 +4,9 @@ from __future__ import absolute_import
 
 from exam import fixture
 
-from sentry.interfaces.exception import SingleException, Exception
+from sentry.interfaces.exception import (
+    SingleException, Exception, trim_exceptions
+)
 from sentry.testutils import TestCase
 
 
@@ -75,6 +77,11 @@ ValueError: hello world
         all_values = sum([v.get_hash() for v in inst.values], [])
         assert inst.get_hash() == all_values
 
+    def test_to_html_render_call(self):
+        # stupid test to ensure that we dont straight up error
+        result = self.interface.to_html(self.event)
+        assert result
+
 
 class SingleExceptionTest(TestCase):
     @fixture
@@ -114,3 +121,34 @@ class SingleExceptionTest(TestCase):
     def test_serialize_unserialize_behavior(self):
         result = type(self.interface).to_python(self.interface.to_json())
         assert result.to_json() == self.interface.to_json()
+
+    def test_only_requires_only_type_or_value(self):
+        SingleException.to_python(dict(
+            type='ValueError',
+        ))
+        SingleException.to_python(dict(
+            value='ValueError',
+        ))
+
+
+class TrimExceptionsTest(TestCase):
+    def test_under_max(self):
+        value = {'values': [{'value': 'foo'}]}
+        trim_exceptions(value)
+        assert len(value['values']) == 1
+        assert value.get('exc_omitted') is None
+
+    def test_over_max(self):
+        values = []
+        for n in xrange(5):
+            values.append({'value': 'frame %d' % n})
+        value = {'values': values}
+        trim_exceptions(value, max_values=4)
+
+        assert len(value['values']) == 4
+
+        for value, num in zip(values[:2], xrange(2)):
+            assert value['value'] == 'frame %d' % num
+
+        for value, num in zip(values[2:], xrange(3, 5)):
+            assert value['value'] == 'frame %d' % num

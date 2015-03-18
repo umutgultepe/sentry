@@ -1,8 +1,10 @@
+from __future__ import absolute_import, print_function
+
 import logging
 
 from django.utils.safestring import mark_safe
 
-from sentry.models import Activity, Event, Group, Project, Team
+from sentry.models import Activity, Event, Group, Project, Rule, Team
 from sentry.utils.samples import load_data
 from sentry.utils.email import inline_css
 from sentry.web.decorators import login_required
@@ -51,6 +53,8 @@ def new_event(request):
         data=load_data('python'),
     )
 
+    rule = Rule(label="An example rule")
+
     interface_list = []
     for interface in event.interfaces.itervalues():
         body = interface.to_email_html(event)
@@ -62,6 +66,7 @@ def new_event(request):
         html_template='sentry/emails/error.html',
         text_template='sentry/emails/error.html',
         context={
+            'rule': rule,
             'group': group,
             'event': event,
             'link': 'http://example.com/link',

@@ -8,23 +8,25 @@ sentry.coreapi
 # TODO: We should make the API a class, and UDP/HTTP just inherit from it
 #       This will make it so we can more easily control logging with various
 #       metadata (rather than generic log messages which aren't useful).
+from __future__ import absolute_import, print_function
 
 import base64
 import logging
+import six
 import uuid
 import zlib
-from gzip import GzipFile
 
 from datetime import datetime, timedelta
-from django.conf import settings
+from django.utils.crypto import constant_time_compare
 from django.utils.encoding import smart_str
-
-import six
+from gzip import GzipFile
 
 from sentry.app import env
+from sentry.cache import default_cache
 from sentry.constants import (
-    DEFAULT_LOG_LEVEL, LOG_LEVELS, MAX_CULPRIT_LENGTH, MAX_TAG_VALUE_LENGTH,
-    MAX_TAG_KEY_LENGTH)
+    CLIENT_RESERVED_ATTRS, DEFAULT_LOG_LEVEL, LOG_LEVELS, MAX_TAG_VALUE_LENGTH,
+    MAX_TAG_KEY_LENGTH
+)
 from sentry.exceptions import InvalidTimestamp
 from sentry.interfaces.base import get_interface
 from sentry.models import Project, ProjectKey
@@ -32,30 +34,12 @@ from sentry.tasks.store import preprocess_event
 from sentry.utils import is_float, json
 from sentry.utils.auth import parse_auth_header
 from sentry.utils.compat import StringIO
-from sentry.utils.strings import decompress, truncatechars
+from sentry.utils.strings import decompress
 
 
-logger = logging.getLogger('sentry.coreapi.errors')
+logger = logging.getLogger('sentry.coreapi')
 
 LOG_LEVEL_REVERSE_MAP = dict((v, k) for k, v in LOG_LEVELS.iteritems())
-
-RESERVED_FIELDS = (
-    'project',
-    'event_id',
-    'message',
-    'checksum',
-    'culprit',
-    'level',
-    'time_spent',
-    'logger',
-    'server_name',
-    'site',
-    'timestamp',
-    'extra',
-    'modules',
-    'tags',
-    'platform',
-)
 
 
 class APIError(Exception):
@@ -106,12 +90,15 @@ def client_metadata(client=None, project=None, exception=None, tags=None, extra=
         if project.team:
             extra['team_slug'] = project.team.slug
             extra['team_id'] = project.team.id
+        if project.organization:
+            extra['organization_slug'] = project.organization.slug
+            extra['organization_id'] = project.organization.id
 
     tags['client'] = client
     if exception:
         tags['exc_type'] = type(exception).__name__
-    if project and project.team:
-        tags['project'] = '%s/%s' % (project.team.slug, project.slug)
+    if project and project.organization:
+        tags['project'] = '%s/%s' % (project.organization.slug, project.slug)
 
     result = {'extra': extra}
     if exception:
@@ -141,8 +128,11 @@ def project_from_auth_vars(auth_vars):
     except ProjectKey.DoesNotExist:
         raise APIForbidden('Invalid api key')
 
-    if pk.secret_key != auth_vars.get('sentry_secret', pk.secret_key):
+    if not constant_time_compare(pk.secret_key, auth_vars.get('sentry_secret', pk.secret_key)):
         raise APIForbidden('Invalid api key')
+
+    if not pk.is_active:
+        raise APIForbidden('API key is disabled')
 
     if not pk.roles.store:
         raise APIForbidden('Key does not allow event storage access')
@@ -208,7 +198,10 @@ def safely_load_json_string(json_string):
 
 
 def process_data_timestamp(data, current_datetime=None):
-    if is_float(data['timestamp']):
+    if not data['timestamp']:
+        del data['timestamp']
+        return data
+    elif is_float(data['timestamp']):
         try:
             data['timestamp'] = datetime.fromtimestamp(float(data['timestamp']))
         except Exception:
@@ -235,6 +228,8 @@ def process_data_timestamp(data, current_datetime=None):
     if data['timestamp'] < current_datetime - timedelta(days=30):
         raise InvalidTimestamp('Invalid value for timestamp (too old): %r' % data['timestamp'])
 
+    data['timestamp'] = float(data['timestamp'].strftime('%s'))
+
     return data
 
 
@@ -246,20 +241,10 @@ def validate_data(project, data, client=None):
         data['message'] = '<no message value>'
     elif not isinstance(data['message'], six.string_types):
         raise APIError('Invalid value for message')
-    elif len(data['message']) > settings.SENTRY_MAX_MESSAGE_LENGTH:
-        logger.info(
-            'Truncated value for message due to length (%d chars)',
-            len(data['message']), **client_metadata(client, project))
-        data['message'] = truncatechars(
-            data['message'], settings.SENTRY_MAX_MESSAGE_LENGTH)
 
     if data.get('culprit'):
         if not isinstance(data['culprit'], six.string_types):
             raise APIError('Invalid value for culprit')
-        logger.info(
-            'Truncated value for culprit due to length (%d chars)',
-            len(data['culprit']), **client_metadata(client, project))
-        data['culprit'] = truncatechars(data['culprit'], MAX_CULPRIT_LENGTH)
 
     if not data.get('event_id'):
         data['event_id'] = uuid.uuid4().hex
@@ -336,7 +321,7 @@ def validate_data(project, data, client=None):
         data['tags'] = tags
 
     for k in data.keys():
-        if k in RESERVED_FIELDS:
+        if k in CLIENT_RESERVED_ATTRS:
             continue
 
         value = data.pop(k)
@@ -392,6 +377,15 @@ def validate_data(project, data, client=None):
     return data
 
 
+def ensure_does_not_have_ip(data):
+    if 'sentry.interfaces.Http' in data:
+        if 'env' in data['sentry.interfaces.Http']:
+            data['sentry.interfaces.Http']['env'].pop('REMOTE_ADDR', None)
+
+    if 'sentry.interfaces.User' in data:
+        data['sentry.interfaces.User'].pop('ip_address', None)
+
+
 def ensure_has_ip(data, ip_address):
     if data.get('sentry.interfaces.Http', {}).get('env', {}).get('REMOTE_ADDR'):
         return
@@ -403,4 +397,6 @@ def ensure_has_ip(data, ip_address):
 
 
 def insert_data_to_database(data):
-    preprocess_event.delay(data=data)
+    cache_key = 'e:{1}:{0}'.format(data['project'], data['event_id'])
+    default_cache.set(cache_key, data, timeout=3600)
+    preprocess_event.delay(cache_key=cache_key)

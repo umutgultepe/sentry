@@ -5,6 +5,8 @@ sentry.plugins.bases.tag
 :copyright: (c) 2010-2014 by the Sentry Team, see AUTHORS for more details.
 :license: BSD, see LICENSE for more details.
 """
+from __future__ import absolute_import
+
 from sentry.constants import MAX_TAG_VALUE_LENGTH
 from sentry.models import Group
 from sentry.plugins import Plugin
@@ -32,6 +34,4 @@ class TagPlugin(Plugin):
         ]
 
     def post_process(self, group, event, is_new, is_sample, **kwargs):
-        # legacy compatibility for older plugins
-        if not hasattr(Plugin, 'get_tags'):
-            Group.objects.add_tags(group, self.get_tags(event))
+        Group.objects.add_tags(group, self.get_tags(event))

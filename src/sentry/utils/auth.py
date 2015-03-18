@@ -5,8 +5,12 @@ sentry.utils.auth
 :copyright: (c) 2010-2014 by the Sentry Team, see AUTHORS for more details.
 :license: BSD, see LICENSE for more details.
 """
+from __future__ import absolute_import
+
 from django.conf import settings
 from django.contrib.auth.backends import ModelBackend
+from django.core.urlresolvers import reverse
+
 from sentry.models import User
 
 
@@ -22,12 +26,25 @@ def get_auth_providers():
     ]
 
 
-def find_users(username):
+def get_login_redirect(request):
+    default = reverse('sentry')
+    login_url = request.session.pop('_next', None) or default
+    if '//' in login_url:
+        login_url = default
+    elif login_url.startswith(reverse('sentry-login')):
+        login_url = default
+    return login_url
+
+
+def find_users(username, with_valid_password=True):
     """
     Return a list of users that match a username
     and falling back to email
     """
-    qs = User.objects.exclude(password='!')
+    qs = User.objects
+    if with_valid_password:
+        qs = qs.exclude(password='!')
+
     try:
         # First, assume username is an iexact match for username
         user = qs.get(username__iexact=username)

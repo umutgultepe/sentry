@@ -5,23 +5,22 @@ sentry.interfaces.user
 :copyright: (c) 2010-2014 by the Sentry Team, see AUTHORS for more details.
 :license: BSD, see LICENSE for more details.
 """
+from __future__ import absolute_import
 
 __all__ = ('User',)
 
 from sentry.interfaces.base import Interface
 from sentry.utils.safe import trim, trim_dict
 from sentry.web.helpers import render_to_string
+from ipaddr import IPAddress
 
 
 def validate_ip(value, required=True):
-    # TODO(dcramer): we should just use ipaddr here
     if not required and not value:
         return
 
-    assert value.count('.') == 3
-    for comp in value.split('.'):
-        assert comp.isdigit()
-        assert -1 < int(comp) <= 256
+    # will raise a ValueError
+    IPAddress(value)
     return value
 
 
@@ -65,15 +64,26 @@ class User(Interface):
     def get_hash(self):
         return []
 
-    def to_html(self, event, is_public=False, **kwargs):
-        if is_public:
-            return ''
-        return render_to_string('sentry/partial/interfaces/user.html', {
-            'is_public': is_public,
-            'event': event,
+    def get_context(self):
+        return {
             'user_ip_address': self.ip_address,
             'user_id': self.id,
             'user_username': self.username,
             'user_email': self.email,
             'user_data': self.data,
+        }
+
+    def to_html(self, event, is_public=False, **kwargs):
+        if is_public:
+            return ''
+
+        context = self.get_context()
+        context.update({
+            'is_public': is_public,
+            'event': event,
         })
+        return render_to_string('sentry/partial/interfaces/user.html', context)
+
+    def to_email_html(self, event, **kwargs):
+        context = self.get_context()
+        return render_to_string('sentry/partial/interfaces/user_email.html', context)

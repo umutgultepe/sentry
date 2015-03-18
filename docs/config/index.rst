@@ -19,7 +19,7 @@ Authentication
 --------------
 
 
-.. data:: SENTRY_ALLOW_REGISTRATION
+.. data:: SENTRY_FEATURES['auth:register']
     :noindex:
 
     Should Sentry allow users to create new accounts?
@@ -28,7 +28,7 @@ Authentication
 
     ::
 
-        SENTRY_ALLOW_REGISTRATION = False
+        SENTRY_FEATURES['auth:register'] = True
 
 .. data:: SENTRY_PUBLIC
     :noindex:
@@ -43,30 +43,6 @@ Authentication
     ::
 
         SENTRY_PUBLIC = True
-
-.. data:: SENTRY_ALLOW_PROJECT_CREATION
-    :noindex:
-
-    Should Sentry allow users without the 'sentry.add_project' permission to
-    create new projects?
-
-    Defaults to ``False`` (require permission).
-
-    ::
-
-        SENTRY_ALLOW_PROJECT_CREATION = True
-
-.. data:: SENTRY_ALLOW_TEAM_CREATION
-    :noindex:
-
-    Should Sentry allow users without the 'sentry.add_team' permission to
-    create new teams?
-
-    Defaults to ``True`` (require permission).
-
-    ::
-
-        SENTRY_ALLOW_TEAM_CREATION = False
 
 .. data:: SENTRY_ALLOW_PUBLIC_PROJECTS
     :noindex:

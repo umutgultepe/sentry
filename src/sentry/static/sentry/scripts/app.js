@@ -62,12 +62,13 @@
 
         makeDefaultView: function(id){
             return new app.GroupListView({
+                emptyMessage: '<p>There are no events to show.</p>',
                 className: 'group-list small',
                 id: id,
                 maxItems: 5,
                 stream: this.options.stream,
                 realtime: this.options.realtime,
-                model: app.models.Group
+                model: app.models.Group,
             });
         },
 
@@ -93,8 +94,9 @@
                 maxItems: 50,
                 realtime: ($.cookie('pausestream') ? false : true),
                 canStream: this.options.canStream,
-                pollUrl: app.config.urlPrefix + '/api/' + app.config.teamId + '/' + app.config.projectId + '/poll/',
-                model: app.models.Group
+                pollUrl: app.config.urlPrefix + '/api/' + app.config.organizationId + '/' + app.config.projectId + '/poll/',
+                model: app.models.Group,
+                emptyMessage: $('#empty_message').html()
             });
 
             this.control = $('a[data-action=pause]');
@@ -190,65 +192,6 @@
 
     });
 
-    app.SelectTeamPage = BasePage.extend({
-
-        initialize: function(){
-            BasePage.prototype.initialize.apply(this, arguments);
-
-            this.refreshSparklines();
-            $(window).on('resize', this.refreshSparklines);
-        },
-
-        refreshSparklines: function(){
-            $('.chart').each(function(n, el){
-                var $el = $(el);
-                $.ajax({
-                    url: $el.attr('data-api-url'),
-                    type: 'get',
-                    dataType: 'json',
-                    data: {
-                        since: new Date().getTime() / 1000 - 3600 * 24,
-                        resolution: '1h'
-                    },
-                    success: _.bind(function(data){
-                        for (var i = 0; i < data.length; i++) {
-                            // set timestamp to be in millis
-                            data[i][0] = data[i][0] * 1000;
-                        }
-
-                        $.plot($el, [{
-                                data: data,
-                                color: '#ebeff3',
-                                shadowSize: 0,
-                                lines: {
-                                    lineWidth: 2,
-                                    show: true,
-                                    fill: true,
-                                    color: '#f6f8fa'
-                            }
-                            }], {
-                                yaxis: {
-                                    min: 0
-                                },
-                                grid: {
-                                    show: false
-                                },
-                                hoverable: false,
-                                legend: {
-                                    noColumns: 5
-                                },
-                                lines: {
-                                    show: false
-                                }
-                            }
-                        );
-                    }, this)
-                });
-            });
-        }
-
-    });
-
     app.GroupDetailsPage = BasePage.extend({
 
         initialize: function(data){
@@ -264,21 +207,43 @@
             $('#chart').height('150px');
             Sentry.charts.render('#chart');
 
-            $('#public-status .action').click(function(){
-                var $this = $(this);
-                $.ajax({
-                    url: $this.attr('data-api-url'),
-                    type: 'post',
-                    success: function(group){
-                        var selector = (group.isPublic ? 'true' : 'false');
-                        var nselector = (group.isPublic ? 'false' : 'true');
-                        $('#public-status span[data-public="' + selector + '"]').show();
-                        $('#public-status span[data-public="' + nselector + '"]').hide();
-                    },
-                    error: function(){
-                        window.alert('There was an error changing the public status');
-                    }
-                });
+            $('.share-link').popover({
+                html: true,
+                placement: 'left',
+                container: document.body,
+                title: 'Share Event',
+                content: function(){
+                    var $this = $(this);
+                    var $content = $('<form class="share-form"></form>');
+                    var $urlel = $('<code class="clippy">' + $this.data('share-url') + '</code>');
+                    var isChecked = $this.data('public');
+
+                    $urlel.clippy({
+                        clippy_path: app.config.clippyPath,
+                        keep_text: true
+                    });
+                    $content.append($urlel);
+                    $content.append($('<label class="checkbox">' +
+                        '<input type="checkbox"' + (isChecked ? ' checked="checked"' : '') + '/>' +
+                        'Allow anonymous users to view this event.' +
+                    '</label>'));
+
+                    var $checkbox = $content.find('input[type=checkbox]').change(function(){
+                        var url = $this.data($(this).is(':checked') ? 'public-url' : 'private-url');
+                        $.ajax({
+                            url: url,
+                            type: 'post',
+                            success: function(group){
+                                $this.data('public', group.isPublic);
+                            },
+                            error: function(){
+                                window.alert('There was an error changing the public status');
+                            }
+                        });
+                    });
+
+                    return $content;
+                }
             });
 
             $('.add-note-btn').click(function(e){
@@ -295,6 +260,50 @@
                     $form.removeClass('hide');
                     $form.find('textarea:first').focus();
                 }
+            });
+
+            $('.add-note-form').submit(function(el){
+                var $this = $(this);
+                $this.find('button[type=submit]').attr('disabled', true).addClass('disabled');
+                $this.find('textarea').addClass('disabled');
+            });
+
+            $('.tag-widget').each(function(){
+                var $widget = $(this);
+                $.ajax({
+                    url: $widget.data('url'),
+                    error: function() {
+                        $widget.find('.loading').remove();
+                        $widget.append($('<li class="error">Unable to load tag information</li>'));
+                    },
+                    success: function(data) {
+                        var total = data.total,
+                            eTagName = encodeURIComponent(data.name);
+
+                        $widget.find('.loading').remove();
+                        if (total === 0) {
+                            $widget.append($('<li>No data available.</li>'));
+                        } else {
+                            $.each(data.values, function(_, item){
+                                var tagValue = item.value,
+                                    timesSeen = item.count,
+                                    tagLabel = app.utils.escape(item.label || item.value),
+                                    percent = parseInt(timesSeen / total * 100, 10),
+                                    url = app.config.urlPrefix + '/' + app.config.organizationId + '/' + app.config.projectId + '/';
+
+                                $('<li>' +
+                                    '<div class="progressbar">' +
+                                        '<div style="width:' + percent + '%">' + timesSeen + '</div>' +
+                                        '<a href="' + url + '?' + eTagName + '=' + encodeURIComponent(tagValue) + '">' +
+                                            tagLabel +
+                                            '<span>' + percent + '%</span>' +
+                                        '</a>' +
+                                    '</div>' +
+                                '</li>').appendTo($widget);
+                            });
+                        }
+                    }
+                });
             });
 
             var $event_nav = $('#event_nav');
@@ -505,9 +514,6 @@
 
     });
 
-    app.AddTeamMemberPage = BasePage.extend({
-    });
-
     app.AccessGroupMembersPage = BasePage.extend({
         initialize: function(){
             BasePage.prototype.initialize.apply(this, arguments);
@@ -602,11 +608,6 @@
                     snap: true
                 });
             }, this));
-
-            $("#tag_list input").each(function(_, el){
-                $(el).addClass('span6');
-                app.utils.makeSearchableTagsInput(el);
-            });
         },
 
         formatThreshold: function formatThreshold(value) {

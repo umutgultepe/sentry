@@ -1,20 +1,21 @@
 Quickstart
 ==========
 
+This guide will step you through setting up a Python-based virtualenv, installing the required packages,
+and configuring the basic web service.
+
+Dependencies
+------------
+
 Some basic prerequisites which you'll need in order to run Sentry:
 
-* A UNIX-based operating system
+* A UNIX-based operating system. We test on Ubuntu.
 * Python 2.7
-* python-setuptools, python-dev, libxslt1-dev, libxml2-dev
-* A real database (PostgreSQL is preferred, MySQL also works)
+* python-setuptools, python-pip, python-dev, libxslt1-dev, libxml2-dev, libz-dev, libffi-dev, libssl-dev
+* A real database (PostgreSQL is preferred, MySQL also works with caveats)
 * Redis
-
-The recommended configuration of Sentry involves setting up a separate web server to handle your error
-logging. This means that any number of Sentry clients simply pass on this information to your primary Sentry
-server.
-
-This guide will step you through setting up a virtualenv, installing the required packages,
-and configuring the basic web service.
+* Nginx (with RealIP, i.e. nginx-full)
+* A dedicated domain to host Sentry on (i.e. sentry.yourcompany.com).
 
 Hardware
 --------
@@ -32,7 +33,7 @@ Redis, Memcached, and RabbitMQ. It's very rare you'd need this complex of a clus
 this is `getsentry.com <https://getsentry.com/>`_.
 
 For more typical, but still fairly high throughput setups, you can run off of a single machine as long as it has
-reasonable IO (ideally SSDS), and a good amount of memory.
+reasonable IO (ideally SSDs), and a good amount of memory.
 
 The main things you need to consider are:
 
@@ -52,7 +53,7 @@ Setting up an Environment
 The first thing you'll need is the Python ``virtualenv`` package. You probably already
 have this, but if not, you can install it with::
 
-  easy_install -UZ virtualenv
+  pip install -U virtualenv
 
 Once that's done, choose a location for the environment, and create it with the ``virtualenv``
 command. For our guide, we're going to choose ``/www/sentry/``::
@@ -63,7 +64,7 @@ Finally, activate your virtualenv::
 
   source /www/sentry/bin/activate
 
-.. note:: Activating the environment adjusts your PATH, so that things like easy_install now
+.. note:: Activating the environment adjusts your PATH, so that things like pip now
           install into the virtualenv by default.
 
 Install Sentry
@@ -72,10 +73,19 @@ Install Sentry
 Once you've got the environment setup, you can install Sentry and all its dependencies with
 the same command you used to grab virtualenv::
 
-  easy_install -UZ sentry
+  pip install -U sentry
 
 Don't be worried by the amount of dependencies Sentry has. We have a philosophy of using the right tools for
 the job, and not reinventing them if they already exist.
+
+Once everything's installed, you should be able to execute the Sentry CLI, via ``sentry``, and get something
+like the following:
+
+.. code-block:: bash
+
+  $ sentry
+  usage: sentry [--config=/path/to/settings.py] [command] [options]
+
 
 Using MySQL or Postgres
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -88,34 +98,24 @@ These databases require additional packages, but Sentry provides a couple of met
 ::
 
   # install sentry and its postgresql dependencies
-  easy_install -UZ sentry[postgres]
+  pip install -U sentry[postgres]
 
   # or if you choose, mysql
-  easy_install -UZ sentry[mysql]
+  pip install -U sentry[mysql]
 
 
 Installing from Source
 ~~~~~~~~~~~~~~~~~~~~~~
 
-If you're installing the Sentry source (e.g. from git), you'll need a couple of extra dependencies:
+If you're installing the Sentry source (e.g. from git), you'll also need to install **npm**.
 
-- node.js (npm)
-- git
-
-Once your system is prepared, simply run the ``make`` command to
-get all of the application dependencies:
+Once your system is prepared, symlink your source into the virtualenv:
 
 .. code-block:: bash
 
-  $ make develop
+  $ python setup.py develop
 
-Once everything's installed, you should be able to execute the Sentry CLI, via ``sentry``, and get something
-like the following:
-
-.. code-block:: bash
-
-  $ sentry
-  usage: sentry [--config=/path/to/settings.py] [command] [options]
+.. Note:: This command will install npm dependencies as well as compile static assets.
 
 
 Initializing the Configuration
@@ -138,26 +138,26 @@ is not a fully supported database and should not be used in production**.
 
     # ~/.sentry/sentry.conf.py
 
+    # for more information on DATABASES, see the Django configuration at:
+    # https://docs.djangoproject.com/en/1.6/ref/databases/
     DATABASES = {
         'default': {
-            'ENGINE': 'django.db.backends.postgresql_psycopg2',  # We suggest PostgreSQL for optimal performance
+            # We suggest PostgreSQL for optimal performance
+            'ENGINE': 'django.db.backends.postgresql_psycopg2',
+
+            # Alternatively you can use MySQL
+            'ENGINE': 'django.db.backends.mysql',
+
             'NAME': 'sentry',
             'USER': 'postgres',
             'PASSWORD': '',
             'HOST': '',
             'PORT': '',
-            'OPTIONS': {
-                'autocommit': True,
-            }
         }
     }
 
     # No trailing slash!
     SENTRY_URL_PREFIX = 'http://sentry.example.com'
-
-    # SENTRY_KEY is a unique randomly generated secret key for your server, and it
-    # acts as a signing token
-    SENTRY_KEY = '0123456789abcde'
 
     SENTRY_WEB_HOST = '0.0.0.0'
     SENTRY_WEB_PORT = 9000
@@ -225,24 +225,21 @@ the first time you'll need to make sure you've created the database:
     # If you're using Postgres, and kept the database ``NAME`` as ``sentry``
     $ createdb -E utf-8 sentry
 
+    # alternatively if you're using MySQL, ensure you've created the database:
+    $ mysql -e 'create database sentry'
+
 Once done, you can create the initial schema using the ``upgrade`` command:
 
 .. code-block:: python
 
     $ sentry --config=/etc/sentry.conf.py upgrade
 
-**It's very important that you create the default superuser through the upgrade process. If you do not, there is
-a good chance you'll see issues in your initial install.**
-
-If you did not create the user on the first run, you can correct this by doing the following:
+Next up you'll need to create the first user, which will act as a superuser:
 
 .. code-block:: bash
 
     # create a new user
-    $ sentry --config=/etc/sentry.conf.py createsuperuser
-
-    # run the automated repair script
-    $ sentry --config=/etc/sentry.conf.py repair --owner=<username>
+    $ sentry --config=/etc/sentry.conf.py createuser
 
 All schema changes and database upgrades are handled via the ``upgrade`` command, and this is the first
 thing you'll want to run when upgrading to future versions of Sentry.
@@ -268,6 +265,24 @@ You should now be able to test the web service by visiting `http://localhost:900
 
 .. note:: This doesn't run any workers in the background, so assuming queueing is enabled (default in 7.0.0+)
           no asyncrhonous tasks will be running.
+
+Starting the Workers
+--------------------
+
+A large amount of Sentry's work is typically done via it's workers. While Sentry will seemingly work without
+using a queue you will not actually see anything show up in Sentry.  Once you've configured the queue, you'll
+also need to run workers. Generally, this is as simple as running "celery" from the Sentry CLI.
+
+So do not forget to run the workers!
+
+::
+
+  sentry --config=/etc/sentry.conf.py celery worker -B
+
+Technically there is a way to run sentry without the queues by setting ``CELERY_ALWAYS_EAGER`` to `True`
+but this is heavily discouraged and not supported.
+
+.. note:: `Celery <http://celeryproject.org/>`_ is an open source task framework for Python.
 
 Setup a Reverse Proxy
 ---------------------
@@ -336,6 +351,8 @@ folder and you're good to go.
   autostart=true
   autorestart=true
   redirect_stderr=true
+  stdout_logfile syslog
+  stderr_logfile syslog
 
   [program:sentry-worker]
   directory=/www/sentry/
@@ -343,6 +360,19 @@ folder and you're good to go.
   autostart=true
   autorestart=true
   redirect_stderr=true
+  stdout_logfile syslog
+  stderr_logfile syslog
+
+
+Removing Old Data
+-----------------
+
+One of the most important things you're going to need to be aware of is storage costs. You'll want to setup a cron job that runs to automatically trim stale data. This won't guarantee space is reclaimed (i.e. by SQL), but it will try to minimize the footprint. This task is designed to run under various environments so it doesn't delete things in the most optimal way possible, but as long as you run it routinely (i.e. daily) you should be fine.
+
+.. code-block:: bash
+
+  $ crontab -e
+  * 3 * * * sentry cleanup --days=30
 
 
 Additional Utilities
@@ -354,8 +384,8 @@ power and flexibility that goes with it.
 
 Some of those which you'll likely find useful are:
 
-createsuperuser
-~~~~~~~~~~~~~~~
+createuser
+~~~~~~~~~~
 
 Quick and easy creation of superusers. These users have full access to the entirety of the Sentry server.
 
@@ -366,43 +396,23 @@ Testing Sentry locally? Spin up Django's builtin runserver (or ``pip install dja
 slightly better).
 
 
-Enabling Social Auth
---------------------
+Enabling Third Party Auth
+-------------------------
 
 Most of the time it doesn't really matter **how** someone authenticates to the service, so much as it that they do. In
-these cases, Sentry provides tight integrated with several large social services, including: Twitter, Facebook, Google,
+these cases, Sentry provides integrating with several common services, including: Google
 and GitHub. Enabling this is as simple as setting up an application with the respective services, and configuring a
 couple values in your ``sentry.conf.py`` file.
 
 By default, users will be able to both signup (create a new account) as well as associate an existing account. If you
-want to disable account creation, simply set the following value::
-
-  SOCIAL_AUTH_CREATE_USERS = False
-
-Twitter
-~~~~~~~
-
-Register an application at http://twitter.com/apps/new. Take the values given on the page, and configure
-the following:
+want to disable account creation, simply set the following value:
 
 .. code-block:: python
 
-  TWITTER_CONSUMER_KEY = ''
-  TWITTER_CONSUMER_SECRET = ''
+  SENTRY_FEATURES = {
+    'social-auth:register': False,
+  }
 
-.. note:: It's important that input a callback URL, even if its useless. We have no idea why, consult Twitter.
-
-Facebook
-~~~~~~~~
-
-Register an application at http://developers.facebook.com/setup/. You'll also need to make sure you select the "Website
-with Facebook Login" and fill in the Site URL field (just use the website's URL you're install Sentry on). Take the
-values given on the page, and configure the following:
-
-.. code-block:: python
-
-  FACEBOOK_APP_ID = ''
-  FACEBOOK_API_SECRET = ''
 
 Google
 ~~~~~~
@@ -414,6 +424,7 @@ the following:
 
   GOOGLE_OAUTH2_CLIENT_ID = ''
   GOOGLE_OAUTH2_CLIENT_SECRET = ''
+
 
 GitHub
 ~~~~~~
@@ -429,16 +440,6 @@ the following:
 For more information on configuring social authentication services, consult the `documentation on django-social-auth
 <https://github.com/omab/django-social-auth/>`_.
 
-Trello
-~~~~~~
-
-Generate an application key at https://trello.com/1/appKey/generate. Take the values given on the page, and configure
-the following:
-
-.. code-block:: python
-
-  TRELLO_API_KEY = ''
-  TRELLO_API_SECRET = ''
 
 What's Next?
 ------------

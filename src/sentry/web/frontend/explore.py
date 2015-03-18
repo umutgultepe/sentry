@@ -7,8 +7,9 @@ Contains views for the "Explore" section of Sentry.
 :copyright: (c) 2010-2014 by the Sentry Team, see AUTHORS for more details.
 :license: BSD, see LICENSE for more details.
 """
-from __future__ import division
+from __future__ import absolute_import, division
 
+from sentry.auth import access
 from sentry.models import TagKey, TagValue, Group
 from sentry.web.decorators import has_access
 from sentry.web.helpers import render_to_response
@@ -22,7 +23,7 @@ SORT_OPTIONS = {
 
 
 @has_access
-def tag_list(request, team, project):
+def tag_list(request, organization, project):
     tag_key_qs = sorted(TagKey.objects.filter(
         project=project
     ), key=lambda x: x.get_label())
@@ -43,13 +44,18 @@ def tag_list(request, team, project):
     return render_to_response('sentry/explore/tag_list.html', {
         'SECTION': 'explore',
         'project': project,
-        'team': team,
+        'team': project.team,
+        'organization': organization,
         'tag_list': tag_list,
+        'ACCESS': access.from_user(
+            user=request.user,
+            organization=organization,
+        ).to_django_context(),
     }, request)
 
 
 @has_access
-def tag_value_list(request, team, project, key):
+def tag_value_list(request, organization, project, key):
     tag_key = TagKey.objects.select_related('project').get(
         project=project, key=key)
     tag_values_qs = TagValue.objects.filter(
@@ -69,16 +75,21 @@ def tag_value_list(request, team, project, key):
     return render_to_response('sentry/explore/tag_value_list.html', {
         'SECTION': 'explore',
         'project': project,
-        'team': team,
+        'team': project.team,
+        'organization': organization,
         'SORT_OPTIONS': SORT_OPTIONS,
         'sort_label': SORT_OPTIONS[sort],
         'tag_key': tag_key,
         'tag_values': tag_values_qs,
+        'ACCESS': access.from_user(
+            user=request.user,
+            organization=project.organization,
+        ).to_django_context(),
     }, request)
 
 
 @has_access
-def tag_value_details(request, team, project, key, value_id):
+def tag_value_details(request, organization, project, key, value_id):
     tag_key = TagKey.objects.get(
         project=project, key=key)
     tag_value = TagValue.objects.get(
@@ -93,8 +104,13 @@ def tag_value_details(request, team, project, key, value_id):
     return render_to_response('sentry/explore/tag_value_details.html', {
         'SECTION': 'explore',
         'project': project,
-        'team': team,
+        'team': project.team,
+        'organization': organization,
         'tag_key': tag_key,
         'tag_value': tag_value,
         'event_list': event_list,
+        'ACCESS': access.from_user(
+            user=request.user,
+            organization=organization,
+        ).to_django_context(),
     }, request)

@@ -7,9 +7,7 @@ import mock
 from datetime import datetime
 from uuid import UUID
 
-from sentry.models import Project, User
 from sentry.exceptions import InvalidTimestamp
-from sentry.constants import MAX_CULPRIT_LENGTH
 from sentry.coreapi import (
     extract_auth_vars, project_from_auth_vars, APIForbidden, ensure_has_ip,
     process_data_timestamp, validate_data, get_interface, APIError
@@ -19,8 +17,9 @@ from sentry.testutils import TestCase
 
 class BaseAPITest(TestCase):
     def setUp(self):
-        self.user = User.objects.create(username='coreapi')
-        self.project = Project.objects.create(owner=self.user, name='Foo', slug='bar')
+        self.user = self.create_user('coreapi@example.com')
+        self.team = self.create_team(name='Foo', owner=self.user)
+        self.project = self.create_project(team=self.team)
         self.pm = self.project.team.member_set.get_or_create(user=self.user)[0]
         self.pk = self.project.key_set.get_or_create(user=self.user)[0]
 
@@ -87,7 +86,7 @@ class ProcessDataTimestampTest(BaseAPITest):
             'timestamp': '2012-01-01T10:30:45'
         }, current_datetime=d)
         self.assertTrue('timestamp' in data)
-        self.assertEquals(data['timestamp'], d)
+        self.assertEquals(data['timestamp'], 1325413845.0)
 
     def test_iso_timestamp_with_ms(self):
         d = datetime(2012, 01, 01, 10, 30, 45, 434000)
@@ -95,7 +94,7 @@ class ProcessDataTimestampTest(BaseAPITest):
             'timestamp': '2012-01-01T10:30:45.434'
         }, current_datetime=d)
         self.assertTrue('timestamp' in data)
-        self.assertEquals(data['timestamp'], d)
+        self.assertEquals(data['timestamp'], 1325413845.0)
 
     def test_timestamp_iso_timestamp_with_Z(self):
         d = datetime(2012, 01, 01, 10, 30, 45)
@@ -103,7 +102,7 @@ class ProcessDataTimestampTest(BaseAPITest):
             'timestamp': '2012-01-01T10:30:45Z'
         }, current_datetime=d)
         self.assertTrue('timestamp' in data)
-        self.assertEquals(data['timestamp'], d)
+        self.assertEquals(data['timestamp'], 1325413845.0)
 
     def test_invalid_timestamp(self):
         self.assertRaises(InvalidTimestamp, process_data_timestamp, {
@@ -237,12 +236,6 @@ class ValidateDataTest(BaseAPITest):
         self.assertRaises(APIError, validate_data, self.project, {
             'culprit': 1
         })
-
-    def test_long_culprit(self):
-        data = validate_data(self.project, {
-            'culprit': 'x' * (MAX_CULPRIT_LENGTH + 1)
-        })
-        assert len(data['culprit']) == MAX_CULPRIT_LENGTH
 
 
 class GetInterfaceTest(TestCase):

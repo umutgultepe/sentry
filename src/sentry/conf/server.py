@@ -7,8 +7,11 @@ These settings act as the default (base) settings for the Sentry-provided web-se
 :copyright: (c) 2010-2014 by the Sentry Team, see AUTHORS for more details.
 :license: BSD, see LICENSE for more details.
 """
+from __future__ import absolute_import
 
 from django.conf.global_settings import *  # NOQA
+
+from datetime import timedelta
 
 import hashlib
 import os
@@ -17,8 +20,7 @@ import socket
 import sys
 import urlparse
 
-from datetime import timedelta
-
+gettext_noop = lambda s: s
 
 socket.setdefaulttimeout(5)
 
@@ -52,8 +54,11 @@ DATABASES = {
         'PASSWORD': '',
         'HOST': '',
         'PORT': '',
+        'AUTOCOMMIT': True,
+        'ATOMIC_REQUESTS': False,
     }
 }
+
 
 if 'DATABASE_URL' in os.environ:
     url = urlparse.urlparse(os.environ['DATABASE_URL'])
@@ -90,6 +95,82 @@ TIME_ZONE = 'UTC'
 # http://www.i18nguy.com/unicode/language-identifiers.html
 LANGUAGE_CODE = 'en-us'
 
+LANGUAGES = (
+    ('af', gettext_noop('Afrikaans')),
+    ('ar', gettext_noop('Arabic')),
+    ('az', gettext_noop('Azerbaijani')),
+    ('bg', gettext_noop('Bulgarian')),
+    ('be', gettext_noop('Belarusian')),
+    ('bn', gettext_noop('Bengali')),
+    ('br', gettext_noop('Breton')),
+    ('bs', gettext_noop('Bosnian')),
+    ('ca', gettext_noop('Catalan')),
+    ('cs', gettext_noop('Czech')),
+    ('cy', gettext_noop('Welsh')),
+    ('da', gettext_noop('Danish')),
+    ('de', gettext_noop('German')),
+    ('el', gettext_noop('Greek')),
+    ('en', gettext_noop('English')),
+    ('eo', gettext_noop('Esperanto')),
+    ('es', gettext_noop('Spanish')),
+    ('et', gettext_noop('Estonian')),
+    ('eu', gettext_noop('Basque')),
+    ('fa', gettext_noop('Persian')),
+    ('fi', gettext_noop('Finnish')),
+    ('fr', gettext_noop('French')),
+    ('ga', gettext_noop('Irish')),
+    ('gl', gettext_noop('Galician')),
+    ('he', gettext_noop('Hebrew')),
+    ('hi', gettext_noop('Hindi')),
+    ('hr', gettext_noop('Croatian')),
+    ('hu', gettext_noop('Hungarian')),
+    ('ia', gettext_noop('Interlingua')),
+    ('id', gettext_noop('Indonesian')),
+    ('is', gettext_noop('Icelandic')),
+    ('it', gettext_noop('Italian')),
+    ('ja', gettext_noop('Japanese')),
+    ('ka', gettext_noop('Georgian')),
+    ('kk', gettext_noop('Kazakh')),
+    ('km', gettext_noop('Khmer')),
+    ('kn', gettext_noop('Kannada')),
+    ('ko', gettext_noop('Korean')),
+    ('lb', gettext_noop('Luxembourgish')),
+    ('lt', gettext_noop('Lithuanian')),
+    ('lv', gettext_noop('Latvian')),
+    ('mk', gettext_noop('Macedonian')),
+    ('ml', gettext_noop('Malayalam')),
+    ('mn', gettext_noop('Mongolian')),
+    ('my', gettext_noop('Burmese')),
+    ('nb', gettext_noop('Norwegian Bokmal')),
+    ('ne', gettext_noop('Nepali')),
+    ('nl', gettext_noop('Dutch')),
+    ('nn', gettext_noop('Norwegian Nynorsk')),
+    ('os', gettext_noop('Ossetic')),
+    ('pa', gettext_noop('Punjabi')),
+    ('pl', gettext_noop('Polish')),
+    ('pt', gettext_noop('Portuguese')),
+    ('pt-br', gettext_noop('Brazilian Portuguese')),
+    ('ro', gettext_noop('Romanian')),
+    ('ru', gettext_noop('Russian')),
+    ('sk', gettext_noop('Slovak')),
+    ('sl', gettext_noop('Slovenian')),
+    ('sq', gettext_noop('Albanian')),
+    ('sr', gettext_noop('Serbian')),
+    ('sv-se', gettext_noop('Swedish')),
+    ('sw', gettext_noop('Swahili')),
+    ('ta', gettext_noop('Tamil')),
+    ('te', gettext_noop('Telugu')),
+    ('th', gettext_noop('Thai')),
+    ('tr', gettext_noop('Turkish')),
+    ('tt', gettext_noop('Tatar')),
+    ('udm', gettext_noop('Udmurt')),
+    ('uk', gettext_noop('Ukrainian')),
+    ('ur', gettext_noop('Urdu')),
+    ('vi', gettext_noop('Vietnamese')),
+    ('zh-cn', gettext_noop('Simplified Chinese')),
+    ('zh-cn', gettext_noop('Traditional Chinese')),
+)
+
 SITE_ID = 1
 
 # If you set this to False, Django will make some optimizations so as not
@@ -113,6 +194,7 @@ TEMPLATE_LOADERS = (
 
 MIDDLEWARE_CLASSES = (
     'sentry.middleware.maintenance.ServicesUnavailableMiddleware',
+    'sentry.middleware.proxy.SetRemoteAddrFromForwardedFor',
     'sentry.middleware.debug.NoIfModifiedSinceMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -163,13 +245,14 @@ INSTALLED_APPS = (
     'sentry',
     'sentry.nodestore',
     'sentry.search',
+    'sentry.lang.javascript',
     'sentry.plugins.sentry_interface_types',
     'sentry.plugins.sentry_mail',
     'sentry.plugins.sentry_urls',
     'sentry.plugins.sentry_useragents',
+    'sentry.plugins.sentry_webhooks',
     'social_auth',
     'south',
-    'static_compiler',
     'sudo',
 )
 
@@ -179,12 +262,16 @@ STATIC_URL = '/_static/'
 STATICFILES_FINDERS = (
     "django.contrib.staticfiles.finders.FileSystemFinder",
     "django.contrib.staticfiles.finders.AppDirectoriesFinder",
-    "static_compiler.finders.StaticCompilerFinder",
 )
+
+# setup a default media root to somewhere useless
+MEDIA_ROOT = '/tmp/sentry-media'
 
 LOCALE_PATHS = (
     os.path.join(PROJECT_ROOT, 'locale'),
 )
+
+CSRF_FAILURE_VIEW = 'sentry.web.frontend.csrf_failure.view'
 
 # Auth configuration
 
@@ -192,7 +279,7 @@ try:
     from django.core.urlresolvers import reverse_lazy
 except ImportError:
     LOGIN_REDIRECT_URL = '/login-redirect/'
-    LOGIN_URL = '/login/'
+    LOGIN_URL = '/auth/login/'
 else:
     LOGIN_REDIRECT_URL = reverse_lazy('sentry-login-redirect')
     LOGIN_URL = reverse_lazy('sentry-login')
@@ -212,6 +299,7 @@ SOCIAL_AUTH_USER_MODEL = AUTH_USER_MODEL = 'sentry.User'
 
 SESSION_ENGINE = "django.contrib.sessions.backends.signed_cookies"
 SESSION_COOKIE_NAME = "sentrysid"
+SESSION_SERIALIZER = "django.contrib.sessions.serializers.PickleSerializer"
 
 TWITTER_CONSUMER_KEY = ''
 TWITTER_CONSUMER_SECRET = ''
@@ -232,6 +320,8 @@ TRELLO_API_SECRET = ''
 BITBUCKET_CONSUMER_KEY = ''
 BITBUCKET_CONSUMER_SECRET = ''
 
+MAILGUN_API_KEY = ''
+
 SOCIAL_AUTH_PIPELINE = (
     'social_auth.backends.pipeline.user.get_username',
     'social_auth.backends.pipeline.social.social_auth_user',
@@ -243,8 +333,6 @@ SOCIAL_AUTH_PIPELINE = (
     'social_auth.backends.pipeline.user.update_user_details',
     'social_auth.backends.pipeline.misc.save_status_to_session',
 )
-
-SOCIAL_AUTH_CREATE_USERS = True
 
 INITIAL_CUSTOM_USER_MIGRATION = '0108_fix_user'
 
@@ -264,7 +352,7 @@ SOCIAL_AUTH_DEFAULT_USERNAME = lambda: random.choice(['Darth Vader', 'Obi-Wan Ke
 SOCIAL_AUTH_PROTECTED_USER_FIELDS = ['email']
 
 # Queue configuration
-from kombu import Queue
+from kombu import Exchange, Queue
 
 BROKER_URL = "django://"
 
@@ -279,69 +367,133 @@ CELERY_DEFAULT_EXCHANGE = "default"
 CELERY_DEFAULT_EXCHANGE_TYPE = "direct"
 CELERY_DEFAULT_ROUTING_KEY = "default"
 CELERY_CREATE_MISSING_QUEUES = True
-CELERY_QUEUES = (
+CELERY_IMPORTS = (
+    'sentry.tasks.beacon',
+    'sentry.tasks.check_alerts',
+    'sentry.tasks.check_auth',
+    'sentry.tasks.cleanup',
+    'sentry.tasks.deletion',
+    'sentry.tasks.email',
+    'sentry.tasks.index',
+    'sentry.tasks.merge',
+    'sentry.tasks.store',
+    'sentry.tasks.options',
+    'sentry.tasks.post_process',
+    'sentry.tasks.process_buffer',
+)
+CELERY_QUEUES = [
     Queue('default', routing_key='default'),
-    Queue('celery', routing_key='celery'),
     Queue('alerts', routing_key='alerts'),
+    Queue('auth', routing_key='auth'),
     Queue('cleanup', routing_key='cleanup'),
     Queue('sourcemaps', routing_key='sourcemaps'),
     Queue('search', routing_key='search'),
-    Queue('counters', routing_key='counters'),
     Queue('events', routing_key='events'),
-    Queue('triggers', routing_key='triggers'),
     Queue('update', routing_key='update'),
     Queue('email', routing_key='email'),
-)
+    Queue('options', routing_key='options'),
+]
+
+CELERY_ROUTES = ('sentry.queue.routers.SplitQueueRouter',)
+
+
+def create_partitioned_queues(name):
+    exchange = Exchange(name, type='direct')
+    for num in range(1):
+        CELERY_QUEUES.append(Queue(
+            '{0}-{1}'.format(name, num),
+            exchange=exchange,
+        ))
+
+create_partitioned_queues('counters')
+create_partitioned_queues('triggers')
+
+
 CELERYBEAT_SCHEDULE = {
+    'check-auth': {
+        'task': 'sentry.tasks.check_auth',
+        'schedule': timedelta(minutes=1),
+        'options': {
+            'expires': 60,
+            'queue': 'auth',
+        }
+    },
     'check-alerts': {
         'task': 'sentry.tasks.check_alerts',
         'schedule': timedelta(minutes=1),
+        'options': {
+            'expires': 60,
+            'queue': 'alerts',
+        }
     },
-    'check-version': {
-        'task': 'sentry.tasks.check_update',
+    'send-beacon': {
+        'task': 'sentry.tasks.send_beacon',
         'schedule': timedelta(hours=1),
+        'options': {
+            'expires': 3600,
+        },
     },
     'flush-buffers': {
         'task': 'sentry.tasks.process_buffer.process_pending',
         'schedule': timedelta(seconds=10),
+        'options': {
+            'expires': 10,
+            'queue': 'counters-0',
+        }
+    },
+    'sync-options': {
+        'task': 'sentry.tasks.options.sync_options',
+        'schedule': timedelta(seconds=10),
+        'options': {
+            'expires': 10,
+            'queue': 'options',
+        }
     },
 }
-
-# Disable South in tests as it is sending incorrect create signals
-SOUTH_TESTS_MIGRATE = True
 
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': True,
     'handlers': {
         'console': {
-            'class': 'logging.StreamHandler'
+            'level': 'WARNING',
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
         },
         'sentry': {
             'level': 'ERROR',
+            'filters': ['sentry:internal'],
             'class': 'raven.contrib.django.handlers.SentryHandler',
         }
     },
+    'filters': {
+        'sentry:internal': {
+            '()': 'sentry.utils.raven.SentryInternalFilter',
+        },
+    },
     'formatters': {
+        'simple': {
+            'format': '[%(levelname)s] %(message)s',
+        },
         'client_info': {
-            'format': '%(name)s %(levelname)s %(project_slug)s/%(team_slug)s %(message)s'
-        }
+            'format': '[%(levelname)s] %(project_slug)s/%(team_slug)s %(message)s',
+        },
     },
     'root': {
-        'level': 'WARNING',
         'handlers': ['console', 'sentry'],
     },
     'loggers': {
         'sentry': {
             'level': 'ERROR',
-            'handlers': ['console', 'sentry'],
-            'propagate': False,
         },
         'sentry.coreapi': {
             'formatter': 'client_info',
         },
         'sentry.errors': {
-            'level': 'ERROR',
+            'handlers': ['console'],
+            'propagate': False,
+        },
+        'sentry.rules': {
             'handlers': ['console'],
             'propagate': False,
         },
@@ -360,94 +512,13 @@ LOGGING = {
     }
 }
 
-NPM_ROOT = os.path.abspath(os.path.join(PROJECT_ROOT, os.pardir, os.pardir, 'node_modules'))
-
-SENTRY_STATIC_BUNDLES = {
-    "packages": {
-        "sentry/scripts/global.min.js": {
-            "src": [
-                "sentry/scripts/core.js",
-                "sentry/scripts/models.js",
-                "sentry/scripts/templates.js",
-                "sentry/scripts/utils.js",
-                "sentry/scripts/collections.js",
-                "sentry/scripts/charts.js",
-                "sentry/scripts/views.js",
-                "sentry/scripts/app.js",
-            ],
-        },
-        "sentry/scripts/legacy.min.js": {
-            "src": [
-                "sentry/scripts/sentry.core.js",
-                "sentry/scripts/sentry.charts.js",
-                "sentry/scripts/sentry.stream.js",
-            ],
-        },
-        "sentry/scripts/lib.min.js": {
-            "src": [
-                "sentry/scripts/lib/jquery.js",
-                "sentry/scripts/lib/jquery-migrate.js",
-                "sentry/scripts/lib/jquery.animate-colors.js",
-                "sentry/scripts/lib/jquery.clippy.min.js",
-                "sentry/scripts/lib/jquery.cookie.js",
-                "sentry/scripts/lib/jquery.flot.js",
-                "sentry/scripts/lib/jquery.flot.dashes.js",
-                "sentry/scripts/lib/jquery.flot.resize.js",
-                "sentry/scripts/lib/jquery.flot.time.js",
-                "sentry/scripts/lib/jquery.flot.tooltip.js",
-                "sentry/scripts/lib/moment.js",
-                "sentry/scripts/lib/simple-slider.js",
-                "sentry/scripts/lib/json2.js",
-                "sentry/scripts/lib/underscore.js",
-                "sentry/scripts/lib/backbone.js",
-                "sentry/scripts/lib/select2/select2.js",
-            ],
-        },
-        "sentry/scripts/bootstrap.min.js": {
-            "src": [
-                "sentry/bootstrap/js/bootstrap-transition.js",
-                "sentry/bootstrap/js/bootstrap-alert.js",
-                "sentry/bootstrap/js/bootstrap-button.js",
-                "sentry/bootstrap/js/bootstrap-carousel.js",
-                "sentry/bootstrap/js/bootstrap-collapse.js",
-                "sentry/bootstrap/js/bootstrap-dropdown.js",
-                "sentry/bootstrap/js/bootstrap-modal.js",
-                "sentry/bootstrap/js/bootstrap-tooltip.js",
-                "sentry/bootstrap/js/bootstrap-popover.js",
-                "sentry/bootstrap/js/bootstrap-scrollspy.js",
-                "sentry/bootstrap/js/bootstrap-tab.js",
-                "sentry/bootstrap/js/bootstrap-typeahead.js",
-                "sentry/bootstrap/js/bootstrap-affix.js",
-                "sentry/scripts/lib/bootstrap-datepicker.js"
-            ],
-        },
-        "sentry/styles/global.min.css": {
-            "src": {
-                "sentry/less/sentry.less": "sentry/styles/sentry.css",
-            },
-        },
-        "sentry/styles/wall.min.css": {
-            "src": {
-                "sentry/less/wall.less": "sentry/styles/wall.css",
-            },
-        },
-    },
-    "postcompilers": {
-        "*.js": ["node_modules/.bin/uglifyjs {input} --source-map-root={relroot}/ --source-map-url={name}.map{ext} --source-map={relpath}/{name}.map{ext} -o {output}"],
-    },
-    "preprocessors": {
-        "*.less": ["node_modules/.bin/lessc {input} {output}"],
-    },
-}
-
-# We only define static bundles if NPM has been setup
-if os.path.exists(NPM_ROOT):
-    STATIC_BUNDLES = SENTRY_STATIC_BUNDLES
-
 # django-rest-framework
 
 REST_FRAMEWORK = {
     'TEST_REQUEST_DEFAULT_FORMAT': 'json',
+    'DEFAULT_PERMISSION_CLASSES': (
+        'sentry.api.permissions.NoPermission',
+    )
 }
 
 # django-recaptcha
@@ -458,12 +529,24 @@ RECAPTCHA_PRIVATE_KEY = None
 # django-statsd
 
 STATSD_CLIENT = 'django_statsd.clients.null'
+SENTRY_METRICS_PREFIX = ''
 
 # Sentry and Raven configuration
 
-SENTRY_PUBLIC = False
-SENTRY_PROJECT = 1
+SENTRY_CLIENT = 'sentry.utils.raven.SentryInternalClient'
+
+# Project ID for recording frontend (javascript) exceptions
+SENTRY_FRONTEND_PROJECT = None
+
 SENTRY_CACHE_BACKEND = 'default'
+
+SENTRY_FEATURES = {
+    'auth:register': True,
+    'social-auth:register': True,
+    'organizations:create': True,
+    'organizations:sso': False,
+    'teams:create': True,
+}
 
 SENTRY_FILTERS = (
     'sentry.filters.StatusFilter',
@@ -473,10 +556,14 @@ SENTRY_IGNORE_EXCEPTIONS = (
     'OperationalError',
 )
 
-SENTRY_KEY = None
-
 # Absolute URL to the sentry root directory. Should not include a trailing slash.
 SENTRY_URL_PREFIX = ''
+
+# Should we send the beacon to the upstream server?
+SENTRY_BEACON = True
+
+# The administrative contact for this installation
+SENTRY_ADMIN_EMAIL = ''
 
 # Allow access to Sentry without authentication.
 SENTRY_PUBLIC = False
@@ -492,6 +579,7 @@ SENTRY_SAMPLE_DATA = True
 
 # The following values control the sampling rates
 SENTRY_SAMPLE_RATES = (
+    # up until N events, store 1 in M
     (50, 1),
     (1000, 2),
     (10000, 10),
@@ -510,10 +598,7 @@ SENTRY_MAX_SAMPLE_TIME = 10000
 # Web Service
 SENTRY_WEB_HOST = 'localhost'
 SENTRY_WEB_PORT = 9000
-SENTRY_WEB_OPTIONS = {
-    'workers': 3,
-    'limit_request_line': 0,  # required for raven-js
-}
+SENTRY_WEB_OPTIONS = {}
 
 # UDP Service
 SENTRY_UDP_HOST = 'localhost'
@@ -544,28 +629,18 @@ SENTRY_INTERFACES = {
     'sentry.interfaces.User': 'sentry.interfaces.user.User',
 }
 
-# Should users without 'sentry.add_project' permissions be allowed
-# to create new projects
-SENTRY_ALLOW_PROJECT_CREATION = False
-
-# Should users without 'sentry.add_team' permissions be allowed
-# to create new projects
-SENTRY_ALLOW_TEAM_CREATION = False
-
 # Should users without superuser permissions be allowed to
 # make projects public
 SENTRY_ALLOW_PUBLIC_PROJECTS = True
-
-# Should users be allowed to register an account? If this is disabled
-# accounts can only be created when someone is invited or added
-# manually.
-SENTRY_ALLOW_REGISTRATION = True
 
 # Default to not sending the Access-Control-Allow-Origin header on api/store
 SENTRY_ALLOW_ORIGIN = None
 
 # Enable scraping of javascript context for source code
 SENTRY_SCRAPE_JAVASCRIPT_CONTEXT = True
+
+# Enable email invites
+SENTRY_ENABLE_INVITES = True
 
 # Redis connection information (see Nydus documentation)
 SENTRY_REDIS_OPTIONS = {}
@@ -574,9 +649,19 @@ SENTRY_REDIS_OPTIONS = {}
 SENTRY_BUFFER = 'sentry.buffer.Buffer'
 SENTRY_BUFFER_OPTIONS = {}
 
+# Cache backend
+# XXX: We explicitly require the cache to be configured as its not optional
+# and causes serious confusion with the default django cache
+SENTRY_CACHE = None
+SENTRY_CACHE_OPTIONS = {}
+
 # Quota backend
 SENTRY_QUOTAS = 'sentry.quotas.Quota'
 SENTRY_QUOTA_OPTIONS = {}
+
+# Rate limiting backend
+SENTRY_RATELIMITER = 'sentry.ratelimits.base.RateLimiter'
+SENTRY_RATELIMITER_OPTIONS = {}
 
 # The default value for project-level quotas
 SENTRY_DEFAULT_MAX_EVENTS_PER_MINUTE = '90%'
@@ -600,7 +685,20 @@ SENTRY_SEARCH_OPTIONS = {}
 SENTRY_TSDB = 'sentry.tsdb.dummy.DummyTSDB'
 SENTRY_TSDB_OPTIONS = {}
 
-SENTRY_RAVEN_JS_URL = 'cdn.ravenjs.com/1.1.14/jquery,native/raven.min.js'
+# rollups must be ordered from highest granularity to lowest
+SENTRY_TSDB_ROLLUPS = (
+    # (time in seconds, samples to keep)
+    (10, 30),  # 5 minute at 10 seconds
+    (3600, 24 * 7),  # 7 days at 1 hour
+)
+
+
+# File storage
+SENTRY_FILESTORE = 'django.core.files.storage.FileSystemStorage'
+SENTRY_FILESTORE_OPTIONS = {'location': '/tmp/sentry-files'}
+
+# URL to embed in js documentation
+SENTRY_RAVEN_JS_URL = 'cdn.ravenjs.com/1.1.15/jquery,native/raven.min.js'
 
 # URI Prefixes for generating DSN URLs
 # (Defaults to URL_PREFIX by default)
@@ -615,20 +713,58 @@ SENTRY_ENABLE_EXPLORE_USERS = True
 # size in characters
 SENTRY_MAX_VARIABLE_SIZE = 512
 
-# Prevent varabiesl within extra context from exceeding this size in
+# Prevent variables within extra context from exceeding this size in
 # characters
 SENTRY_MAX_EXTRA_VARIABLE_SIZE = 4096
+
+# For changing the amount of data seen in Http Response Body part.
+SENTRY_MAX_HTTP_BODY_SIZE = 2048
 
 # For various attributes we don't limit the entire attribute on size, but the
 # individual item. In those cases we also want to limit the maximum number of
 # keys
 SENTRY_MAX_DICTIONARY_ITEMS = 50
 
-SENTRY_MAX_MESSAGE_LENGTH = 1024 * 10
+SENTRY_MAX_MESSAGE_LENGTH = 1024 * 8
 SENTRY_MAX_STACKTRACE_FRAMES = 25
+SENTRY_MAX_EXCEPTIONS = 25
 
 # Gravatar service base url
 SENTRY_GRAVATAR_BASE_URL = 'https://secure.gravatar.com'
+
+# Timeout (in seconds) for fetching remote source files (e.g. JS)
+SENTRY_SOURCE_FETCH_TIMEOUT = 5
+
+# http://en.wikipedia.org/wiki/Reserved_IP_addresses
+SENTRY_DISALLOWED_IPS = (
+    '0.0.0.0/8',
+    '10.0.0.0/8',
+    '100.64.0.0/10',
+    '127.0.0.0/8',
+    '169.254.0.0/16',
+    '172.16.0.0/12',
+    '192.0.0.0/29',
+    '192.0.2.0/24',
+    '192.88.99.0/24',
+    '192.168.0.0/16',
+    '198.18.0.0/15',
+    '198.51.100.0/24',
+    '224.0.0.0/4',
+    '240.0.0.0/4',
+    '255.255.255.255/32',
+)
+
+# Fields which managed users cannot change via Sentry UI. Username and password
+# cannot be changed by managed users. Optionally include 'email' and
+# 'first_name' in SENTRY_MANAGED_USER_FIELDS.
+SENTRY_MANAGED_USER_FIELDS = ('email',)
+
+# See sentry/options/__init__.py for more information
+SENTRY_OPTIONS = {}
+
+# You should not change this setting after your database has been created
+# unless you have altered all schemas first
+SENTRY_USE_BIG_INTS = False
 
 # Configure celery
 import djcelery

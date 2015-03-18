@@ -5,12 +5,13 @@ sentry.models.projectoption
 :copyright: (c) 2010-2014 by the Sentry Team, see AUTHORS for more details.
 :license: BSD, see LICENSE for more details.
 """
+from __future__ import absolute_import, print_function
 
 from celery.signals import task_postrun
 from django.core.signals import request_finished
 from django.db import models
 
-from sentry.db.models import Model, sane_repr
+from sentry.db.models import Model, FlexibleForeignKey, sane_repr
 from sentry.db.models.fields import UnicodePickledObjectField
 from sentry.db.models.manager import BaseManager
 from sentry.utils.cache import cache
@@ -19,8 +20,6 @@ from sentry.utils.cache import cache
 class ProjectOptionManager(BaseManager):
     def __init__(self, *args, **kwargs):
         super(ProjectOptionManager, self).__init__(*args, **kwargs)
-        task_postrun.connect(self.clear_local_cache)
-        request_finished.connect(self.clear_local_cache)
         self.__cache = {}
 
     def __getstate__(self):
@@ -34,6 +33,7 @@ class ProjectOptionManager(BaseManager):
         self.__cache = {}
 
     def _make_key(self, instance_id):
+        assert instance_id
         return '%s:%s' % (self.model._meta.db_table, instance_id)
 
     def get_value_bulk(self, instances, key):
@@ -53,7 +53,7 @@ class ProjectOptionManager(BaseManager):
 
     def unset_value(self, project, key):
         self.filter(project=project, key=key).delete()
-        self.reload_cache(project)
+        self.reload_cache(project.id)
 
     def set_value(self, project, key, value):
         self.create_or_update(
@@ -90,8 +90,7 @@ class ProjectOptionManager(BaseManager):
             for i in self.filter(project=project_id)
         )
         cache.set(cache_key, result)
-        if project_id in self.__cache:
-            self.__cache[project_id] = result
+        self.__cache[project_id] = result
         return result
 
     def post_save(self, instance, **kwargs):
@@ -99,6 +98,11 @@ class ProjectOptionManager(BaseManager):
 
     def post_delete(self, instance, **kwargs):
         self.reload_cache(instance.project_id)
+
+    def contribute_to_class(self, model, name):
+        super(ProjectOptionManager, self).contribute_to_class(model, name)
+        task_postrun.connect(self.clear_local_cache)
+        request_finished.connect(self.clear_local_cache)
 
 
 class ProjectOption(Model):
@@ -108,7 +112,7 @@ class ProjectOption(Model):
     Options which are specific to a plugin should namespace
     their key. e.g. key='myplugin:optname'
     """
-    project = models.ForeignKey('sentry.Project')
+    project = FlexibleForeignKey('sentry.Project')
     key = models.CharField(max_length=64)
     value = UnicodePickledObjectField()
 

@@ -5,6 +5,7 @@ sentry.models.pendingteammember
 :copyright: (c) 2010-2014 by the Sentry Team, see AUTHORS for more details.
 :license: BSD, see LICENSE for more details.
 """
+from __future__ import absolute_import, print_function
 
 import logging
 
@@ -17,7 +18,7 @@ from django.utils import timezone
 
 from sentry.constants import MEMBER_TYPES, MEMBER_USER
 from sentry.db.models import (
-    Model, BoundedIntegerField, BaseManager, sane_repr
+    Model, BoundedIntegerField, BaseManager, FlexibleForeignKey, sane_repr
 )
 from sentry.utils.http import absolute_uri
 
@@ -26,7 +27,7 @@ class PendingTeamMember(Model):
     """
     Identifies relationships between teams and pending invites.
     """
-    team = models.ForeignKey('sentry.Team', related_name="pending_member_set")
+    team = FlexibleForeignKey('sentry.Team', related_name="pending_member_set")
     email = models.EmailField()
     type = BoundedIntegerField(choices=MEMBER_TYPES, default=MEMBER_USER)
     date_added = models.DateTimeField(default=timezone.now)

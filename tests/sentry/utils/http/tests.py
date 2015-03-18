@@ -7,7 +7,7 @@ import mock
 from django.conf import settings
 from exam import fixture
 
-from sentry.models import Project, ProjectOption
+from sentry.models import Project
 from sentry.testutils import TestCase
 from sentry.utils.http import (
     is_same_domain, is_valid_origin, get_origins, absolute_uri)
@@ -45,16 +45,15 @@ class GetOriginsTestCase(TestCase):
 
     def test_project(self):
         project = Project.objects.get()
-        ProjectOption.objects.create(project=project, key='sentry:origins', value=['http://foo.example'])
+        project.update_option('sentry:origins', ['http://foo.example'])
 
         with self.settings(SENTRY_ALLOW_ORIGIN=None):
             result = get_origins(project)
             self.assertEquals(result, frozenset(['http://foo.example']))
 
     def test_project_and_setting(self):
-        from sentry.models import Project, ProjectOption
         project = Project.objects.get()
-        ProjectOption.objects.create(project=project, key='sentry:origins', value=['http://foo.example'])
+        project.update_option('sentry:origins', ['http://foo.example'])
 
         with self.settings(SENTRY_ALLOW_ORIGIN='http://example.com'):
             result = get_origins(project)
@@ -128,6 +127,14 @@ class IsValidOriginTestCase(TestCase):
         result = self.isValidOrigin('http://example.com:80', ['example.com'])
         self.assertEquals(result, True)
 
+    def test_base_domain_matches_domain_with_explicit_port(self):
+        result = self.isValidOrigin('http://example.com:80', ['example.com:80'])
+        assert result is True
+
+    def test_base_domain_does_not_match_domain_with_invalid_port(self):
+        result = self.isValidOrigin('http://example.com:80', ['example.com:443'])
+        assert result is False
+
     def test_base_domain_does_not_match_subdomain(self):
         result = self.isValidOrigin('http://example.com', ['foo.example.com'])
         self.assertEquals(result, False)
@@ -155,3 +162,24 @@ class IsValidOriginTestCase(TestCase):
     def test_null_invalid_graceful_with_domains(self):
         result = self.isValidOrigin('null', ['http://example.com'])
         self.assertEquals(result, False)
+
+    def test_custom_protocol_with_location(self):
+        result = self.isValidOrigin('sp://custom-thing/foo/bar', ['sp://custom-thing'])
+        assert result is True
+
+        result = self.isValidOrigin('sp://custom-thing-two/foo/bar', ['sp://custom-thing'])
+        assert result is False
+
+    def test_custom_protocol_without_location(self):
+        result = self.isValidOrigin('sp://custom-thing/foo/bar', ['sp://*'])
+        assert result is True
+
+        result = self.isValidOrigin('dp://custom-thing/foo/bar', ['sp://'])
+        assert result is False
+
+    def test_custom_protocol_with_domainish_match(self):
+        result = self.isValidOrigin('sp://custom-thing.foobar/foo/bar', ['sp://*.foobar'])
+        assert result is True
+
+        result = self.isValidOrigin('sp://custom-thing.bizbaz/foo/bar', ['sp://*.foobar'])
+        assert result is False

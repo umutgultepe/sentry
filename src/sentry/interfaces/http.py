@@ -6,16 +6,42 @@ sentry.interfaces.http
 :license: BSD, see LICENSE for more details.
 """
 
+from __future__ import absolute_import
+
 __all__ = ('Http',)
 
+from Cookie import SmartCookie
+from django.conf import settings
 from django.utils.translation import ugettext as _
+from pipes import quote
 from urllib import urlencode
 from urlparse import parse_qsl, urlsplit, urlunsplit
 
 from sentry.constants import HTTP_METHODS
 from sentry.interfaces.base import Interface
-from sentry.utils.safe import trim, trim_dict
+from sentry.utils.safe import trim, trim_dict, safe_execute
 from sentry.web.helpers import render_to_string
+
+
+def format_headers(value):
+    return dict(
+        (k.title(), v)
+        for k, v in value.iteritems()
+    )
+
+
+def format_cookies(value):
+    return dict(
+        (k.encode('utf8').strip(), v)
+        for k, v in value.iteritems()
+    )
+
+
+def format_body(value):
+    return dict(
+        (k.encode('utf8'), v.encode('utf8'))
+        for k, v in value.iteritems()
+    )
 
 
 class Http(Interface):
@@ -91,8 +117,12 @@ class Http(Interface):
         # strip them out
         headers = data.get('headers')
         if headers:
-            if 'Cookie' in headers and not cookies:
-                cookies = headers.pop('Cookie')
+            headers = format_headers(headers)
+            if 'Cookie' in headers:
+                if not cookies:
+                    cookies = headers.pop('Cookie')
+                else:
+                    del headers['Cookie']
             headers = trim_dict(headers)
         else:
             headers = {}
@@ -103,7 +133,7 @@ class Http(Interface):
         elif isinstance(body, dict):
             body = trim_dict(body)
         elif body:
-            body = trim(body, 2048)
+            body = trim(body, settings.SENTRY_MAX_HTTP_BODY_SIZE)
             if headers.get('Content-Type') == cls.FORM_TYPE and '=' in body:
                 body = dict(parse_qsl(body))
 
@@ -117,7 +147,7 @@ class Http(Interface):
         elif not cookies:
             cookies = {}
 
-        kwargs['cookies'] = trim_dict(cookies)
+        kwargs['cookies'] = format_cookies(trim_dict(cookies))
         kwargs['env'] = trim_dict(data.get('env') or {})
         kwargs['headers'] = headers
         kwargs['data'] = body
@@ -157,6 +187,7 @@ class Http(Interface):
             'query_string': self.query_string,
             'fragment': self.fragment,
             'headers': self.headers,
+            'curl': safe_execute(self.to_curl),
         }
         if not is_public:
             # It's kind of silly we store this twice
@@ -167,6 +198,32 @@ class Http(Interface):
             })
 
         return render_to_string('sentry/partial/interfaces/http.html', context)
+
+    def to_curl(self):
+        method = self.method.upper() if self.method else 'GET'
+        if self.cookies:
+            try:
+                cookies = SmartCookie(self.cookies)
+            except Exception:
+                pass
+            else:
+                # The Cookie header is already yanked out of the headers dict
+                # inside `to_python` so we can just safely re-set it.
+                self.headers['Cookie'] = ';'.join(c.output(attrs=[], header='') for c in cookies.values()).strip()
+        bits = []
+        if method != 'GET':
+            bits.append('-X' + method)
+            data = self.data
+            if isinstance(data, dict):
+                data = urlencode(format_body(data))
+            if isinstance(data, basestring):
+                bits.append('--data ' + quote(data))
+        bits.append(quote(self.full_url))
+        for header in self.headers.iteritems():
+            bits.append('-H ' + quote('%s: %s' % header))
+        if 'gzip' in self.headers.get('Accept-Encoding', ''):
+            bits.append('--compressed')
+        return 'curl ' + ' '.join(bits)
 
     def get_alias(self):
         return 'request'

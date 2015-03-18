@@ -5,6 +5,7 @@ sentry.utils
 :copyright: (c) 2010-2014 by the Sentry Team, see AUTHORS for more details.
 :license: BSD, see LICENSE for more details.
 """
+from __future__ import absolute_import
 
 from django.utils.encoding import force_unicode
 
@@ -27,6 +28,6 @@ def to_unicode(value):
 def is_float(var):
     try:
         float(var)
-    except ValueError:
+    except (TypeError, ValueError):
         return False
     return True

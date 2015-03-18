@@ -1,83 +1,99 @@
-from django.conf import settings
+from __future__ import absolute_import
+
 from rest_framework import serializers, status
 from rest_framework.response import Response
 
-from sentry.api.base import Endpoint
+from sentry.api.base import DocSection
+from sentry.api.bases.team import TeamEndpoint
 from sentry.api.decorators import sudo_required
-from sentry.api.permissions import assert_perm
 from sentry.api.serializers import serialize
-from sentry.constants import MEMBER_ADMIN
-from sentry.models import Team, TeamMember, TeamStatus
+from sentry.models import AuditLogEntry, AuditLogEntryEvent, Team, TeamStatus
 from sentry.tasks.deletion import delete_team
 
 
 class TeamSerializer(serializers.ModelSerializer):
-    owner = serializers.Field(source='owner.username')
-
     class Meta:
         model = Team
         fields = ('name', 'slug')
 
-
-class TeamAdminSerializer(TeamSerializer):
-    owner = serializers.SlugRelatedField(slug_field='username', required=False)
-
-    class Meta:
-        model = Team
-        fields = ('name', 'slug', 'owner')
+    def validate_slug(self, attrs, source):
+        value = attrs[source]
+        if Team.objects.filter(slug=value).exclude(id=self.object.id):
+            raise serializers.ValidationError('The slug "%s" is already in use.' % (value,))
+        return attrs
 
 
-class TeamDetailsEndpoint(Endpoint):
-    def get(self, request, team_id):
-        team = Team.objects.get(id=team_id)
+class TeamDetailsEndpoint(TeamEndpoint):
+    doc_section = DocSection.TEAMS
 
-        assert_perm(team, request.user, request.auth)
+    def get(self, request, team):
+        """
+        Retrieve a team
 
+        Return details on an individual team.
+
+            {method} {path}
+
+        """
         return Response(serialize(team, request.user))
 
     @sudo_required
-    def put(self, request, team_id):
-        team = Team.objects.get(id=team_id)
+    def put(self, request, team):
+        """
+        Update a team
 
-        assert_perm(team, request.user, request.auth, access=MEMBER_ADMIN)
+        Update various attributes and configurable settings for the given team.
 
-        # TODO(dcramer): this permission logic is duplicated from the
-        # transformer
-        if request.user.is_superuser or team.owner_id == request.user.id:
-            serializer = TeamAdminSerializer(team, data=request.DATA, partial=True)
-        else:
-            serializer = TeamSerializer(team, data=request.DATA, partial=True)
+            {method} {path}
+            {{
+              "name": "My Team Name"
+            }}
 
+        """
+        serializer = TeamSerializer(team, data=request.DATA, partial=True)
         if serializer.is_valid():
             team = serializer.save()
-            TeamMember.objects.create_or_update(
-                user=team.owner,
-                team=team,
-                defaults={
-                    'type': MEMBER_ADMIN,
-                }
+
+            AuditLogEntry.objects.create(
+                organization=team.organization,
+                actor=request.user,
+                ip_address=request.META['REMOTE_ADDR'],
+                target_object=team.id,
+                event=AuditLogEntryEvent.TEAM_EDIT,
+                data=team.get_audit_log_data(),
             )
+
             return Response(serialize(team, request.user))
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @sudo_required
-    def delete(self, request, team_id):
-        team = Team.objects.get(id=team_id)
+    def delete(self, request, team):
+        """
+        Delete a team
 
-        assert_perm(team, request.user, request.auth, access=MEMBER_ADMIN)
+        Schedules a team for deletion.
 
-        if team.project_set.filter(id=settings.SENTRY_PROJECT).exists():
-            return Response('{"error": "Cannot remove team containing default project."}',
-                            status=status.HTTP_403_FORBIDDEN)
+            {method} {path}
 
-        if not (request.user.is_superuser or team.owner_id == request.user.id):
-            return Response('{"error": "You do not have permission to remove this team."}', status=status.HTTP_403_FORBIDDEN)
+        **Note:** Deletion happens asynchronously and therefor is not immediate.
+        However once deletion has begun the state of a project changes and will
+        be hidden from most public views.
+        """
+        updated = Team.objects.filter(
+            id=team.id,
+            status=TeamStatus.VISIBLE,
+        ).update(status=TeamStatus.PENDING_DELETION)
+        if updated:
+            delete_team.delay(object_id=team.id, countdown=60 * 5)
 
-        team.update(status=TeamStatus.PENDING_DELETION)
-
-        # TODO(dcramer): set status to pending deletion
-        # we delay the task for 5 minutes so we can implement an undo
-        delete_team.delay(object_id=team.id, countdown=60 * 5)
+            AuditLogEntry.objects.create(
+                organization=team.organization,
+                actor=request.user,
+                ip_address=request.META['REMOTE_ADDR'],
+                target_object=team.id,
+                event=AuditLogEntryEvent.TEAM_REMOVE,
+                data=team.get_audit_log_data(),
+            )
 
         return Response(status=204)

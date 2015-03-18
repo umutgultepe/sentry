@@ -1,34 +1,32 @@
+from __future__ import absolute_import
+
 from rest_framework.response import Response
 
-from sentry.api.base import Endpoint
-from sentry.api.permissions import assert_perm
+from sentry.api.base import DocSection, Endpoint
+from sentry.api.bases.group import GroupPermission
 from sentry.api.serializers import serialize
 from sentry.models import Event
-from sentry.web.helpers import group_is_public
 
 
 class EventDetailsEndpoint(Endpoint):
-    def _get_entries(self, request, event):
-        # XXX(dcramer): These are called entries for future-proofing
-        is_public = group_is_public(event.group, request.user)
+    doc_section = DocSection.EVENTS
 
-        interface_list = []
-        for interface in event.interfaces.itervalues():
-            entry = {
-                'data': interface.to_json(),
-                'type': interface.get_alias(),
-            }
-            interface_list.append((interface, entry))
-        interface_list.sort(key=lambda x: x[0].get_display_score(), reverse=True)
-
-        return [i[1] for i in interface_list]
+    permission_classes = (GroupPermission,)
 
     def get(self, request, event_id):
+        """
+        Retrieve an event
+
+        Return details on an individual event.
+
+            {method} {path}
+
+        """
         event = Event.objects.get(
             id=event_id
         )
 
-        assert_perm(event, request.user, request.auth)
+        self.check_object_permissions(request, event.group)
 
         Event.objects.bind_nodes([event], 'data')
 
@@ -55,7 +53,5 @@ class EventDetailsEndpoint(Endpoint):
             data['previousEventID'] = str(prev_event.id)
         else:
             data['previousEventID'] = None
-
-        data['entries'] = self._get_entries(request, event)
 
         return Response(data)

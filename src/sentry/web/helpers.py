@@ -5,29 +5,21 @@ sentry.web.helpers
 :copyright: (c) 2010-2014 by the Sentry Team, see AUTHORS for more details.
 :license: BSD, see LICENSE for more details.
 """
+from __future__ import absolute_import, print_function
 
 import logging
-import warnings
 
 from django.conf import settings
 from django.core.urlresolvers import reverse, resolve
 from django.http import HttpResponse
 from django.template import loader, RequestContext, Context
-from django.utils.datastructures import SortedDict
 from django.utils.safestring import mark_safe
 
-from sentry.constants import MEMBER_OWNER, EVENTS_PER_PAGE, STATUS_HIDDEN
-from sentry.models import Project, Team, Option, ProjectOption, ProjectKey
+from sentry import options
+from sentry.constants import EVENTS_PER_PAGE
+from sentry.models import Project, Team, ProjectOption
 
-logger = logging.getLogger('sentry.errors')
-
-
-def get_project_list(user=None, access=None, hidden=False, key='id', team=None):
-    warnings.warn('get_project_list is Deprecated. Use Project.objects.get_for_user instead.', DeprecationWarning)
-    return SortedDict(
-        (getattr(p, key), p)
-        for p in Project.objects.get_for_user(user, access)
-    )
+logger = logging.getLogger('sentry')
 
 
 def group_is_public(group, user):
@@ -48,14 +40,9 @@ def group_is_public(group, user):
     if user.is_superuser:
         return False
     # project owners can view events
-    if group.project in get_project_list(user).values():
+    if group.project in Project.objects.get_for_user(team=group.project.team, user=user):
         return False
     return True
-
-
-def get_team_list(user, access=None):
-    warnings.warn('get_team_list is Deprecated. Use Team.objects.get_for_user instead.', DeprecationWarning)
-    return Team.objects.get_for_user(user, access)
 
 
 _LOGIN_URL = None
@@ -79,22 +66,6 @@ def get_login_url(reset=False):
     return _LOGIN_URL
 
 
-def get_internal_project():
-    try:
-        project = Project.objects.get(id=settings.SENTRY_PROJECT)
-    except Project.DoesNotExist:
-        return {}
-    try:
-        projectkey = ProjectKey.objects.filter(project=project).order_by('-user')[0]
-    except IndexError:
-        return {}
-
-    return {
-        'id': project.id,
-        'dsn': projectkey.get_dsn(public=True)
-    }
-
-
 def get_default_context(request, existing_context=None, team=None):
     from sentry.plugins import plugins
 
@@ -102,32 +73,27 @@ def get_default_context(request, existing_context=None, team=None):
         'EVENTS_PER_PAGE': EVENTS_PER_PAGE,
         'URL_PREFIX': settings.SENTRY_URL_PREFIX,
         'PLUGINS': plugins,
-        'STATUS_HIDDEN': STATUS_HIDDEN,
+        'ALLOWED_HOSTS': settings.ALLOWED_HOSTS,
+        'SENTRY_RAVEN_JS_URL': settings.SENTRY_RAVEN_JS_URL,
     }
 
     if request:
         if existing_context and not team and 'team' in existing_context:
             team = existing_context['team']
 
+        if team:
+            context['organization'] = team.organization
+
         context.update({
             'request': request,
         })
-        if team:
-            # TODO: remove this extra query
-            context.update({
-                'can_admin_team': [team in Team.objects.get_for_user(request.user, MEMBER_OWNER)],
-            })
 
-        if not existing_context or 'TEAM_LIST' not in existing_context:
+        if (not existing_context or 'TEAM_LIST' not in existing_context) and team:
             context['TEAM_LIST'] = Team.objects.get_for_user(
-                request.user, with_projects=True).values()
-
-        if not existing_context or 'PROJECT_LIST' not in existing_context:
-            # HACK:
-            for t, p_list in context['TEAM_LIST']:
-                if t == team:
-                    context['PROJECT_LIST'] = p_list
-                    break
+                organization=team.organization,
+                user=request.user,
+                with_projects=True,
+            )
 
     return context
 
@@ -188,7 +154,7 @@ def plugin_config(plugin, project, request):
         if project:
             value = ProjectOption.objects.get_value(project, key, NOTSET)
         else:
-            value = Option.objects.get_value(key, NOTSET)
+            value = options.get(key)
         if value is not NOTSET:
             initials[field] = value
 
@@ -205,8 +171,9 @@ def plugin_config(plugin, project, request):
                 if hasattr(exc, 'read') and callable(exc.read):
                     test_results = '%s\n%s' % (exc, exc.read())
                 else:
-                    test_results = exc
-            if test_results is None:
+                    logging.exception('Plugin(%s) raised an error during test', plugin_key)
+                    test_results = 'There was an internal error with the Plugin'
+            if not test_results:
                 test_results = 'No errors returned'
         else:
             for field, value in form.cleaned_data.iteritems():
@@ -214,7 +181,7 @@ def plugin_config(plugin, project, request):
                 if project:
                     ProjectOption.objects.set_value(project, key, value)
                 else:
-                    Option.objects.set_value(key, value)
+                    options.set(key, value)
 
             return ('redirect', None)
 

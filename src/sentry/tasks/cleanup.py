@@ -5,8 +5,10 @@ sentry.tasks.cleanup
 :copyright: (c) 2010-2014 by the Sentry Team, see AUTHORS for more details.
 :license: BSD, see LICENSE for more details.
 """
+from __future__ import absolute_import
 
 from nydus.utils import ThreadPool
+
 from sentry.tasks.base import instrumented_task
 
 
@@ -31,13 +33,14 @@ def cleanup(days=30, project=None, chunk_size=1000, concurrency=1, **kwargs):
     from sentry import app
     # TODO: TagKey and GroupTagKey need cleaned up
     from sentry.models import (
-        Group, Event, EventMapping,
+        Group, GroupRuleStatus, Event, EventMapping,
         GroupTagValue, TagValue, Alert,
         Activity, LostPasswordHash)
     from sentry.search.django.models import SearchDocument
 
     GENERIC_DELETES = (
         (SearchDocument, 'date_changed'),
+        (GroupRuleStatus, 'date_added'),
         (GroupTagValue, 'last_seen'),
         (Event, 'datetime'),
         (Activity, 'datetime'),
@@ -54,15 +57,16 @@ def cleanup(days=30, project=None, chunk_size=1000, concurrency=1, **kwargs):
 
     log.info("Removing expired values for LostPasswordHash")
     LostPasswordHash.objects.filter(
-        date_added__lte=timezone.now() - datetime.timedelta(days=1)
+        date_added__lte=timezone.now() - datetime.timedelta(hours=48)
     ).delete()
 
     # TODO: we should move this into individual backends
-    log.info("Removing old Node values")
-    try:
-        app.nodestore.cleanup(ts)
-    except NotImplementedError:
-        log.warning("Node backend does not support cleanup operation")
+    if not project:
+        log.info("Removing old Node values")
+        try:
+            app.nodestore.cleanup(ts)
+        except NotImplementedError:
+            log.warning("Node backend does not support cleanup operation")
 
     # Remove types which can easily be bound to project + date
     for model, date_col in GENERIC_DELETES:

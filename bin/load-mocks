@@ -8,8 +8,11 @@ from pytz import utc
 from random import randint
 
 from sentry.app import tsdb
-from sentry.models import Activity, User, Project, Team
+from sentry.models import (
+    AccessGroup, Activity, User, Organization, Project, Team
+)
 from sentry.utils.samples import create_sample_event
+
 
 def create_sample_time_series(event):
     group = event.group
@@ -18,46 +21,119 @@ def create_sample_time_series(event):
 
     for _ in xrange(60):
         count = randint(1, 10)
-        tsdb.incr(tsdb.models.project, group.project.id, now, count)
-        tsdb.incr(tsdb.models.group, group.id, now, count)
+        tsdb.incr_multi((
+            (tsdb.models.project, group.project.id),
+            (tsdb.models.group, group.id),
+        ), now, count)
+        tsdb.incr_multi((
+            (tsdb.models.organization_total_received, group.project.organization_id),
+            (tsdb.models.project_total_received, group.project.id),
+        ), now, int(count * 1.1))
+        tsdb.incr_multi((
+            (tsdb.models.organization_total_rejected, group.project.organization_id),
+            (tsdb.models.project_total_rejected, group.project.id),
+        ), now, int(count * 0.1))
         now = now - timedelta(seconds=1)
 
     for _ in xrange(24 * 30):
         count = randint(100, 1000)
-        tsdb.incr(tsdb.models.project, group.project.id, now, count)
-        tsdb.incr(tsdb.models.group, group.id, now, count)
+        tsdb.incr_multi((
+            (tsdb.models.project, group.project.id),
+            (tsdb.models.group, group.id),
+        ), now, count)
+        tsdb.incr_multi((
+            (tsdb.models.organization_total_received, group.project.organization_id),
+            (tsdb.models.project_total_received, group.project.id),
+        ), now, int(count * 1.1))
+        tsdb.incr_multi((
+            (tsdb.models.organization_total_rejected, group.project.organization_id),
+            (tsdb.models.project_total_rejected, group.project.id),
+        ), now, int(count * 0.1))
         now = now - timedelta(hours=1)
 
 
-user = User.objects.filter(is_superuser=True)[0]
+def main():
+    user = User.objects.filter(is_superuser=True)[0]
 
-team, _ = Team.objects.get_or_create(
-    name='Earth', slug='earth',
-    defaults={
-        'owner': user,
-    },
-)
+    dummy_user, _ = User.objects.get_or_create(
+        username='dummy@example.com'
+    )
 
-project, _ = Project.objects.get_or_create(
-    team=team,
-    name='Backend',
-    slug='backend',
-    owner=team.owner,
-)
+    mocks = (
+        ('Massive Dynamic', ('Ludic Science',)),
+        ('Captain Planet', ('Earth', 'Fire', 'Wind', 'Water', 'Heart')),
+    )
 
-event1 = create_sample_event(project, 'python')
-create_sample_time_series(event1)
+    print('Mocking org {}'.format('Default'))
+    org, _ = Organization.objects.get_or_create(
+        name='Default',
+        defaults={
+            'owner': user,
+        },
+    )
 
-event2 = create_sample_event(project, 'javascript')
-create_sample_time_series(event2)
+    for team_name, project_names in mocks:
+        print('> Mocking team {}'.format(team_name))
+        team, _ = Team.objects.get_or_create(
+            name=team_name,
+            defaults={
+                'organization': org,
+                'owner': org.owner,
+            },
+        )
 
-Activity.objects.create(
-    type=Activity.DEPLOY,
-    project=project,
-    ident='4f38b65c62c4565aa94bba391ff8946922a8eed4',
-    user=user,
-    data={'version': '4f38b65c62c4565aa94bba391ff8946922a8eed4'},
-)
+        for project_name in project_names:
+            print('  > Mocking project {}'.format(project_name))
+            project, _ = Project.objects.get_or_create(
+                team=team,
+                name=project_name,
+                defaults={
+                    'organization': org,
+                }
+            )
 
-event3 = create_sample_event(project, 'java')
-create_sample_time_series(event3)
+            event1 = create_sample_event(
+                project=project,
+                platform='python',
+                release='4f38b65c62c4565aa94bba391ff8946922a8eed4',
+            )
+            create_sample_time_series(event1)
+
+            event2 = create_sample_event(
+                project=project,
+                platform='javascript',
+                release='4f38b65c62c4565aa94bba391ff8946922a8eed4',
+            )
+            create_sample_time_series(event2)
+
+            Activity.objects.create(
+                type=Activity.RELEASE,
+                project=project,
+                ident='4f38b65c62c4565aa94bba391ff8946922a8eed4',
+                user=user,
+                data={'version': '4f38b65c62c4565aa94bba391ff8946922a8eed4'},
+            )
+
+            event3 = create_sample_event(project, 'java')
+
+        accessgroup, _ = AccessGroup.objects.get_or_create(
+            name='Example',
+            team=team,
+        )
+        accessgroup.projects.add(project)
+        accessgroup.members.add(dummy_user)
+
+    Activity.objects.create(
+        type=Activity.RELEASE,
+        project=project,
+        ident='4f38b65c62c4565aa94bba391ff8946922a8eed4',
+        user=user,
+        data={'version': '4f38b65c62c4565aa94bba391ff8946922a8eed4'},
+    )
+
+
+if __name__ == '__main__':
+    from django.conf import settings
+    settings.CELERY_ALWAYS_EAGER = True
+
+    main()

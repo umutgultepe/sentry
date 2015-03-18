@@ -1,3 +1,5 @@
+from __future__ import absolute_import
+
 from django.conf import settings
 from django.utils.html import escape
 from django.utils.translation import ugettext as _
@@ -25,8 +27,11 @@ class Interface(object):
     render differently than the default ``extra`` metadata in an event.
     """
 
+    _data = None
     score = 0
     display_score = None
+
+    __slots__ = ['_data']
 
     def __init__(self, **data):
         self._data = data or {}
@@ -35,6 +40,12 @@ class Interface(object):
         if type(self) != type(other):
             return False
         return self._data == other._data
+
+    def __getstate__(self):
+        return dict(
+            (slot, self.__dict__.get(slot))
+            for slot in self.__slots__
+        )
 
     def __setstate__(self, state):
         self.__dict__.update(state)
@@ -57,8 +68,10 @@ class Interface(object):
     def to_json(self):
         # eliminate empty values for serialization to compress the keyspace
         # and save (seriously) ridiculous amounts of bytes
+        # XXX(dcramer): its important that we keep zero values here, but empty
+        # lists and strings get discarded as we've deemed them not important
         return dict(
-            (k, v) for k, v in self._data.iteritems() if v
+            (k, v) for k, v in self._data.iteritems() if (v == 0 or v)
         )
 
     def get_path(self):
@@ -68,11 +81,14 @@ class Interface(object):
     def get_alias(self):
         return self.get_slug()
 
-    def get_composite_hash(self, interfaces):
-        return self.get_hash()
-
     def get_hash(self):
         return []
+
+    def compute_hashes(self):
+        result = self.get_hash()
+        if not result:
+            return []
+        return [result]
 
     def get_slug(self):
         return type(self).__name__.lower()
